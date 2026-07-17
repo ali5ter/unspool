@@ -1,7 +1,7 @@
 // Package feed orchestrates a sync: resolving subscriptions, pulling each
 // channel's Shorts-free uploads (RSS incrementally, playlistItems.list for
 // first-run backfill), batching video-detail lookups, and merging the
-// result into the local store (PRD §5.1, §6.4).
+// result into the local store.
 package feed
 
 import (
@@ -17,7 +17,7 @@ import (
 )
 
 // backfillItems is how many videos to pull on a channel's first sync, when
-// the RSS feed's ~15-item window may not be enough (PRD §2.4).
+// the RSS feed's ~15-item window may not be enough.
 const backfillItems = 30
 
 // Item is a single feed row: a video plus its channel and mutable state.
@@ -130,8 +130,8 @@ func syncChannel(ctx context.Context, client *api.Client, st *store.Store, cfg *
 	fresh, err := fetchChannelVideos(ctx, client, uploadsLFPlaylistID, channelID, backfill)
 	if err != nil {
 		// Not every channel has a UULF playlist (observed in practice, not
-		// just the theoretical PRD §2.4 concern) — fall back to the full
-		// uploads playlist and lean on the duration-based Shorts guard below.
+		// just a theoretical concern) — fall back to the full uploads
+		// playlist and lean on the duration-based Shorts guard below.
 		fresh, err = fetchChannelVideos(ctx, client, api.UploadsPlaylistID(channelID), channelID, backfill)
 		if err != nil {
 			return nil, err

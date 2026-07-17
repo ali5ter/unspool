@@ -2,8 +2,8 @@ package tui
 
 import "charm.land/bubbles/v2/key"
 
-// keyMap centralises the M1 feed keybindings (PRD §7.4 — a subset; Queue,
-// playlist, mute, and inspect actions land with their own milestones).
+// keyMap centralises the M1 feed keybindings — a subset; Queue, playlist,
+// mute, and inspect actions land with their own milestones.
 type keyMap struct {
 	Play      key.Binding
 	AudioOnly key.Binding

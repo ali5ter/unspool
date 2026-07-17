@@ -94,7 +94,7 @@ type PlaylistsCacheFile struct {
 	Playlists     []Playlist `json:"playlists"`
 }
 
-// Verdict is a cached LLM inspect result for a video (PRD §5.2 tier 2).
+// Verdict is a cached LLM inspect result for a video.
 type Verdict struct {
 	VideoID        string    `json:"video_id"`
 	LikelyAI       bool      `json:"likely_ai"`

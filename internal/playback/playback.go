@@ -1,5 +1,5 @@
 // Package playback launches mpv (which uses yt-dlp as its stream backend)
-// to play a video, and records the launch to the watch log (PRD §5.4, §5.6).
+// to play a video, and records the launch to the watch log.
 package playback
 
 import (

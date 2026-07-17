@@ -1,6 +1,6 @@
 // Package api wraps the YouTube Data API v3 and its quota-free RSS
-// companion, implementing the Shorts-free subscription feed (PRD §5.1) and
-// the quota discipline invariant (PRD §6.4).
+// companion, implementing the Shorts-free subscription feed and staying
+// disciplined about quota spend.
 package api
 
 import (
@@ -12,7 +12,7 @@ import (
 	"google.golang.org/api/youtube/v3"
 )
 
-// Per-call quota costs (PRD §2.1). videos.rate, playlists.insert, and
+// Per-call quota costs. videos.rate, playlists.insert, and
 // playlistItems.insert/delete/update all cost 50 units; search.list costs
 // 100; list calls (subscriptions, playlistItems, playlists, videos) cost 1
 // unit per page.

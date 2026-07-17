@@ -8,9 +8,8 @@ import (
 )
 
 // FetchPlaylistItems pulls up to maxItems videos from a playlist via
-// playlistItems.list (1 unit/page — PRD §5.1). Used as the backfill path
-// when the RSS feed's ~15-item window isn't enough, e.g. a channel's first
-// sync.
+// playlistItems.list (1 unit/page). Used as the backfill path when the RSS
+// feed's ~15-item window isn't enough, e.g. a channel's first sync.
 func (c *Client) FetchPlaylistItems(ctx context.Context, playlistID, channelID string, maxItems int) ([]store.Video, error) {
 	var videos []store.Video
 	pageToken := ""

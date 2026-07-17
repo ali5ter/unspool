@@ -1,5 +1,5 @@
 // Package auth handles the YouTube Data API v3 OAuth 2.0 installed-app
-// loopback flow and system-keychain token storage (PRD §6.3).
+// loopback flow and system-keychain token storage.
 package auth
 
 import (
@@ -25,7 +25,7 @@ import (
 const loopbackTimeout = 3 * time.Minute
 
 // scopes requests read access plus the write access needed to manage
-// playlists and rate videos (PRD §6.3).
+// playlists and rate videos.
 var scopes = []string{
 	youtube.YoutubeScope,
 	youtube.YoutubeForceSslScope,

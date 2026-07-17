@@ -10,8 +10,7 @@ import (
 
 // ResolveSubscriptions fetches every channel the authenticated user is
 // subscribed to via subscriptions.list(mine=true), paginating 50 at a time
-// (1 unit/page — PRD §5.1), and derives each channel's Shorts-free uploads
-// playlist ID.
+// (1 unit/page), and derives each channel's Shorts-free uploads playlist ID.
 func (c *Client) ResolveSubscriptions(ctx context.Context) ([]store.Subscription, error) {
 	var subs []store.Subscription
 	pageToken := ""
@@ -51,8 +50,8 @@ func (c *Client) ResolveSubscriptions(ctx context.Context) ([]store.Subscription
 
 // UploadsLongFormPlaylistID derives a channel's Shorts-free uploads playlist
 // ID by taking the 22-character suffix of its "UC…" channel ID and
-// prefixing "UULF" (PRD §5.1). This convention is undocumented by Google but
-// has been stable for years.
+// prefixing "UULF". This convention is undocumented by Google but has been
+// stable for years.
 func UploadsLongFormPlaylistID(channelID string) string {
 	if len(channelID) < 2 || channelID[:2] != "UC" {
 		return ""
@@ -62,8 +61,8 @@ func UploadsLongFormPlaylistID(channelID string) string {
 
 // UploadsPlaylistID derives a channel's full uploads playlist ID (includes
 // Shorts and live). Used as a fallback when a channel has no UULF variant —
-// observed in practice, not just the theoretical PRD §2.4 concern — paired
-// with the duration-based Shorts guard (IsLikelyShort) to still filter them.
+// observed in practice, not just a theoretical concern — paired with the
+// duration-based Shorts guard (IsLikelyShort) to still filter them.
 func UploadsPlaylistID(channelID string) string {
 	if len(channelID) < 2 || channelID[:2] != "UC" {
 		return ""

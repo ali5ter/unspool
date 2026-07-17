@@ -1,6 +1,6 @@
 // Package tui implements unspool's Bubble Tea interface. M1 ships the Feed
 // tab only — Queue, Playlists, Liked, History, and Recommended land with
-// their own milestones (PRD §11).
+// their own milestones.
 package tui
 
 import (

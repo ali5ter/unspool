@@ -9,18 +9,18 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Queue holds Queue-mirroring settings (PRD §5.4).
+// Queue holds Queue-mirroring settings.
 type Queue struct {
 	Mirror           bool   `mapstructure:"mirror"`
 	MirrorPlaylistID string `mapstructure:"mirror_playlist_id"`
 }
 
-// Recommendations holds synthesised-recommendations settings (PRD §5.8).
+// Recommendations holds synthesised-recommendations settings.
 type Recommendations struct {
 	Enabled bool `mapstructure:"enabled"`
 }
 
-// Filters holds feed-filtering settings (PRD §5.1, §5.2).
+// Filters holds feed-filtering settings.
 type Filters struct {
 	HideShorts        bool    `mapstructure:"hide_shorts"`
 	AIScoreThreshold  float64 `mapstructure:"ai_score_threshold"`
@@ -28,7 +28,7 @@ type Filters struct {
 	ShowSyntheticFlag bool    `mapstructure:"show_synthetic_flag"`
 }
 
-// Classifier holds the model-agnostic AI-slop inspection shell-out hooks (PRD §5.2 tiers 1-2).
+// Classifier holds the model-agnostic AI-slop inspection shell-out hooks.
 type Classifier struct {
 	TranscriptCommand      string `mapstructure:"transcript_command"`
 	InspectCommand         string `mapstructure:"inspect_command"`

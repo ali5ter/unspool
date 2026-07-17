@@ -2,8 +2,8 @@ package tui
 
 import "charm.land/lipgloss/v2"
 
-// Warm near-black base with a desaturated red accent (PRD §7.4) — never
-// YouTube's white/red glare.
+// Warm near-black base with a desaturated red accent — never YouTube's
+// white/red glare.
 var (
 	colorBG     = lipgloss.Color("#141210")
 	colorAccent = lipgloss.Color("#b3564a") // desaturated YouTube-red nod

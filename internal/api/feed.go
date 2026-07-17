@@ -12,12 +12,12 @@ import (
 )
 
 // rssTimeout bounds a single feed fetch; native feeds are occasionally
-// rate-limited or briefly unavailable (PRD §2.4).
+// rate-limited or briefly unavailable.
 const rssTimeout = 10 * time.Second
 
 // FetchRSSFeed fetches the quota-free Atom feed for a Shorts-free uploads
 // playlist (UULF-prefixed). Returns only the latest ~15 items — a
-// "new since last sync" mechanism, not a backfill (PRD §2.4).
+// "new since last sync" mechanism, not a backfill.
 func FetchRSSFeed(ctx context.Context, uploadsLFPlaylistID, channelID string) ([]store.Video, error) {
 	url := fmt.Sprintf("https://www.youtube.com/feeds/videos.xml?playlist_id=%s", uploadsLFPlaylistID)
 
@@ -81,10 +81,9 @@ type VideoDetail struct {
 	ContainsSyntheticMedia bool
 }
 
-// FetchVideoDetails batches videos.list calls (50 IDs/call, 1 unit/call —
-// PRD §6.4) to fetch duration and provenance metadata. Duration feeds the
-// Shorts fallback guard (≤180s + portrait — PRD §5.1) in case the UULF
-// convention ever breaks.
+// FetchVideoDetails batches videos.list calls (50 IDs/call, 1 unit/call) to
+// fetch duration and provenance metadata. Duration feeds the Shorts fallback
+// guard (IsLikelyShort) in case the UULF convention ever breaks.
 func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[string]VideoDetail, error) {
 	out := make(map[string]VideoDetail, len(videoIDs))
 
@@ -113,9 +112,9 @@ func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[
 	return out, nil
 }
 
-// IsLikelyShort applies the fallback guard from PRD §5.1: short duration is
-// the reliable half of the signal available without a real aspect-ratio
-// read (the API doesn't expose one directly on videos.list).
+// IsLikelyShort is a fallback Shorts guard: short duration is the reliable
+// half of the signal available without a real aspect-ratio read (the API
+// doesn't expose one directly on videos.list).
 func IsLikelyShort(durationSeconds int) bool {
 	return durationSeconds > 0 && durationSeconds <= 180
 }

@@ -8,8 +8,8 @@ import (
 
 // CheckDependencies reports whether mpv and yt-dlp are on PATH, returning an
 // actionable error listing per-platform install hints for whatever is
-// missing (PRD §5.6). It never blocks startup — callers decide whether a
-// missing dependency should be fatal or just a status-bar warning.
+// missing. It never blocks startup — callers decide whether a missing
+// dependency should be fatal or just a status-bar warning.
 func CheckDependencies() error {
 	var missing []string
 	if _, err := exec.LookPath("mpv"); err != nil {

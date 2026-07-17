@@ -11,7 +11,7 @@ import (
 )
 
 // pipelineVideo is the --json output shape: a flattened, jq-friendly view of
-// a feed item (PRD §5.7).
+// a feed item.
 type pipelineVideo struct {
 	VideoID   string `json:"video_id"`
 	Title     string `json:"title"`

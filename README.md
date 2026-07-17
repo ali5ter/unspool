@@ -1,25 +1,23 @@
 # unspool
 
-A subscription-first YouTube TUI — Shorts-free, distraction-free, and locally owned.
+A TUI to browse YouTube subscriptions and playlists — Shorts-free, distraction-free, and
+locally owned.
 
 `unspool` treats your YouTube subscriptions and playlists as the primary interface: no
 algorithmic home feed, no Shorts, no autoplay. It owns your feed state, queue, and watch
 history locally as plain JSON, and gives AI-generated "slop" a best-effort, honestly-labelled
-filter. Built in the same mould as [`wwlog`](https://github.com/ali5ter/wwlog).
-
-The full product spec lives in [`PRD.md`](PRD.md).
+filter.
 
 ## Status
 
-**Pre-release, M1 in progress** (read-only feed). Not yet on Homebrew or GitHub Releases —
-build from source for now. See [`PRD.md` §11](PRD.md#11-suggested-milestones-all-api-only) for
-the milestone roadmap.
+**Pre-release, M1 in progress** (read-only feed). Not yet on Homebrew — build from source or
+grab a [release binary](https://github.com/ali5ter/unspool/releases) for now.
 
 ## Features (target, per milestone)
 
 - **Shorts-free by construction** — sourced from each channel's `UULF` uploads playlist, not
   post-filtered
-- **Local-first store** — plain JSON, `wwlog`-style; `--export json` is close to a straight copy
+- **Local-first store** — plain JSON on disk; `--export json` is close to a straight copy
 - **Best-effort AI-slop filtering** — channel mute (reliable) + metadata heuristics (advisory) +
   provenance badges (precise, low recall) + an on-demand LLM inspect hook — never asserts
   certainty
@@ -80,17 +78,41 @@ unspool --json | jq '.[] | select(.duration_seconds > 1200)'
 
 ## Configuration
 
-`~/.config/unspool/config.toml` — see [`PRD.md` §8](PRD.md#8-config-configunspoolconfigtoml)
-for the full schema (playback, thumbnails, theme, Queue mirroring, AI-filter thresholds, the
-model-agnostic classifier shell-out hooks).
+`~/.config/unspool/config.toml` (macOS: `~/Library/Application Support/unspool/config.toml`).
+Key settings:
+
+```toml
+store_dir              = ""            # local store path (default: alongside config)
+max_resolution         = 1080
+audio_only_default     = false
+playback_detached      = true
+thumbnails             = "auto"        # "auto" | "chafa" | "halfblock" | "off"
+theme                  = "warm-dark"
+view_mode              = "rows"        # "rows" | "grid"
+cookies_from_browser   = ""            # playback auth only; "" | "firefox" | "chrome" | "safari"
+sponsorblock           = ["sponsor", "selfpromo", "interaction"]
+
+[queue]
+mirror                 = true          # keep the Queue synced to a real playlist
+
+[filters]
+hide_shorts            = true
+ai_score_threshold     = 0.7           # dim/hide feed items scoring above this (0 = off)
+ai_autohide            = false         # false = badge+dim; true = hide outright
+
+[classifier]
+# Model-agnostic shell-out hooks for AI-slop inspection. Empty = metadata heuristics only.
+transcript_command     = ""
+inspect_command        = ""
+```
 
 ## Why not just use the YouTube app?
 
 Shorts can't be permanently disabled, the home feed optimises for engagement over your actual
-subscriptions, and there's no filter for the growing volume of AI-generated content. See
-[`PRD.md` §1](PRD.md#1-why-this-exists) for the full rationale, and
-[§2](PRD.md#2-feasibility-summary-read-this-first) for what the YouTube Data API can and can't
-do — and why.
+subscriptions, and there's no reliable filter for the growing volume of AI-generated content —
+the platform only flags self-declared synthetic media, which misses most AI voiceover,
+AI-written scripts, and faceless AI channels entirely. `unspool` can't fix YouTube itself, but
+it can make sure none of that ever reaches its own view of your subscriptions.
 
 ## License
 

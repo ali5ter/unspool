@@ -1,11 +1,11 @@
 package api
 
-// DailyQuota is Google's default per-project unit budget (PRD §2.4). It is
-// per Google Cloud project and cannot be bought up.
+// DailyQuota is Google's default per-project unit budget. It is per Google
+// Cloud project and cannot be bought up.
 const DailyQuota = 10000
 
 // Quota tracks units spent this process. There is no cross-run persistence
-// by design (PRD §6.4) — sync on explicit action only, never a timer.
+// by design — sync on explicit action only, never a timer.
 type Quota struct {
 	spent int
 }
