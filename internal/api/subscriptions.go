@@ -59,3 +59,14 @@ func UploadsLongFormPlaylistID(channelID string) string {
 	}
 	return "UULF" + channelID[2:]
 }
+
+// UploadsPlaylistID derives a channel's full uploads playlist ID (includes
+// Shorts and live). Used as a fallback when a channel has no UULF variant —
+// observed in practice, not just the theoretical PRD §2.4 concern — paired
+// with the duration-based Shorts guard (IsLikelyShort) to still filter them.
+func UploadsPlaylistID(channelID string) string {
+	if len(channelID) < 2 || channelID[:2] != "UC" {
+		return ""
+	}
+	return "UU" + channelID[2:]
+}

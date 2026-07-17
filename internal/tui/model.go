@@ -71,6 +71,12 @@ type syncDoneMsg struct {
 	err    error
 }
 
+// statusErrMsg carries a non-sync error (e.g. a failed playback launch) into
+// the status bar without being mistaken for a sync failure.
+type statusErrMsg struct {
+	err error
+}
+
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, runSync(m.cfg))
 }
@@ -116,6 +122,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case statusErrMsg:
+		if msg.err != nil {
+			m.statusMsg = msg.err.Error()
+		} else {
+			m.statusMsg = "playing…"
+		}
+		return m, nil
+
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -142,11 +156,10 @@ func (m Model) playSelected(audioOnly bool) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		err := playback.Play(m.cfg, m.store, sel.Video, sel.Channel, audioOnly)
-		if err != nil {
-			return syncDoneMsg{err: fmt.Errorf("play: %w", err)}
+		if err := playback.Play(m.cfg, m.store, sel.Video, sel.Channel, audioOnly); err != nil {
+			return statusErrMsg{err: err}
 		}
-		return nil
+		return statusErrMsg{err: nil}
 	}
 }
 

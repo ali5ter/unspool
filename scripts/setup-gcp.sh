@@ -65,6 +65,18 @@ resolve_project() {
     echo "$new_id"
 }
 
+# @description Prints unspool's expected client_secret.json path, matching
+#   os.UserConfigDir() in config/config.go (Application Support on macOS, XDG on Linux).
+# @return Prints the path to stdout
+# @example client_secret_path
+client_secret_path() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        echo "$HOME/Library/Application Support/unspool/client_secret.json"
+    else
+        echo "$HOME/.config/unspool/client_secret.json"
+    fi
+}
+
 main() {
     pfb heading "unspool — Google Cloud setup" "☁️"
 
@@ -93,7 +105,7 @@ main() {
     pfb info "2. Create an OAuth client ID of type 'Desktop app':"
     pfb suggestion "https://console.cloud.google.com/auth/clients?project=$project_id"
     pfb info "3. Download the client JSON and save it to:"
-    pfb suggestion "  ~/.config/unspool/client_secret.json"
+    pfb suggestion "  $(client_secret_path)"
     pfb info "4. Then run: unspool --login"
 }
 

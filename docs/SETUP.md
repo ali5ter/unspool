@@ -36,13 +36,12 @@ finishes; otherwise:
 
 ## 4. Install the client secret
 
-Save the downloaded file to:
+Save the downloaded file as `client_secret.json` in unspool's config directory:
 
-```text
-~/.config/unspool/client_secret.json
-```
+- **macOS:** `~/Library/Application Support/unspool/client_secret.json`
+- **Linux:** `~/.config/unspool/client_secret.json`
 
-(Or point `oauth_client_secret_file` in `~/.config/unspool/config.toml` at a different path.)
+(Or point `oauth_client_secret_file` in `config.toml`, in that same directory, at a different path.)
 
 ## 5. Log in
 

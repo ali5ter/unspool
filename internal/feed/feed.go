@@ -126,14 +126,16 @@ func syncChannel(ctx context.Context, client *api.Client, st *store.Store, cfg *
 		return nil, err
 	}
 
-	var fresh []store.Video
-	if len(cached.Videos) == 0 {
-		fresh, err = client.FetchPlaylistItems(ctx, uploadsLFPlaylistID, channelID, backfillItems)
-	} else {
-		fresh, err = api.FetchRSSFeed(ctx, uploadsLFPlaylistID, channelID)
-	}
+	backfill := len(cached.Videos) == 0
+	fresh, err := fetchChannelVideos(ctx, client, uploadsLFPlaylistID, channelID, backfill)
 	if err != nil {
-		return nil, err
+		// Not every channel has a UULF playlist (observed in practice, not
+		// just the theoretical PRD §2.4 concern) — fall back to the full
+		// uploads playlist and lean on the duration-based Shorts guard below.
+		fresh, err = fetchChannelVideos(ctx, client, api.UploadsPlaylistID(channelID), channelID, backfill)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	merged, needDetails := mergeVideos(cached.Videos, fresh)
@@ -165,6 +167,16 @@ func syncChannel(ctx context.Context, client *api.Client, st *store.Store, cfg *
 		return nil, err
 	}
 	return kept, nil
+}
+
+// fetchChannelVideos pulls a playlist's videos: playlistItems.list on a
+// channel's first sync (RSS's ~15-item window isn't enough for a backfill),
+// otherwise the quota-free RSS feed.
+func fetchChannelVideos(ctx context.Context, client *api.Client, playlistID, channelID string, backfill bool) ([]store.Video, error) {
+	if backfill {
+		return client.FetchPlaylistItems(ctx, playlistID, channelID, backfillItems)
+	}
+	return api.FetchRSSFeed(ctx, playlistID, channelID)
 }
 
 func toSet(ids []string) map[string]bool {
