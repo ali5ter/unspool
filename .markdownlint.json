@@ -1,0 +1,6 @@
+{
+  "line-length": { "line_length": 120, "code_block_line_length": 120, "tables": false },
+  "no-inline-html": false,
+  "MD024": { "siblings_only": true },
+  "MD060": false
+}

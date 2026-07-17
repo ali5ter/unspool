@@ -1,0 +1,10 @@
+unspool
+dist/
+*.swp
+*~
+.env
+*.cast
+CLAUDE.md
+CLAUDE.md.backup.*
+AGENTS.md
+AGENTS.md.backup.*
