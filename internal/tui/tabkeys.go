@@ -4,7 +4,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/ali5ter/unspool/internal/feed"
 	"github.com/ali5ter/unspool/internal/queue"
@@ -228,7 +227,7 @@ func (m Model) openSelectedPlaylist() (tea.Model, tea.Cmd) {
 	}
 	m.openPlaylistID = sel.playlist.PlaylistID
 	m.openPlaylistTitle = sel.playlist.Title
-	m.playlistItemsList.Title = "unspool · " + sel.playlist.Title
+	m.playlistItemsList.Title = "▸ " + sel.playlist.Title
 	m.statusMsg = "loading playlist…"
 	return m, openPlaylistCmd(m.cfg, sel.playlist.PlaylistID)
 }
@@ -288,8 +287,7 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderPicker() string {
-	header := styleTitle.Render("Add \"" + m.pickerVideo.Title + "\" to playlist")
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", m.pickerList.View(), "", styleMeta.Render("↵ select   esc cancel"))
+	return renderDialog("Add \""+m.pickerVideo.Title+"\" to playlist", m.pickerList.View(), "↵ select   esc cancel")
 }
 
 func (m Model) updateCreatingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -311,6 +309,5 @@ func (m Model) updateCreatingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 func (m Model) renderCreatePlaylist() string {
-	header := styleTitle.Render("New playlist")
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", m.newPlaylistInput.View(), "", styleMeta.Render("↵ create   esc cancel"))
+	return renderDialog("New playlist", m.newPlaylistInput.View(), "↵ create   esc cancel")
 }

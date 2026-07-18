@@ -38,14 +38,36 @@ func (t tab) prev() tab {
 
 var tabLabels = [...]string{"feed", "queue", "playlists", "liked"}
 
-func renderTabBar(active tab, width int) string {
-	parts := make([]string, len(tabLabels))
+// renderHeader renders the single top row: "unspool" leading, then the tab
+// strip pushed to the right with a colorPanel background band spanning the
+// full width (mirrors wwlog's headerView).
+func renderHeader(active tab, width int) string {
+	title := styleHeaderAccent.Render("unspool")
+
+	var tabs string
 	for i, label := range tabLabels {
 		if tab(i) == active {
-			parts[i] = styleTabActive.Render(" " + label + " ")
+			tabs += styleTabActive.Render(label)
 		} else {
-			parts[i] = styleTabInactive.Render(" " + label + " ")
+			tabs += styleTabInactive.Render(label)
 		}
 	}
-	return lipgloss.NewStyle().Width(width).Render(lipgloss.JoinHorizontal(lipgloss.Top, parts...))
+
+	gap := width - lipgloss.Width(title) - lipgloss.Width(tabs)
+	if gap < 0 {
+		gap = 0
+	}
+	band := lipgloss.NewStyle().Background(colorPanel)
+	return band.Width(width).Render(title + band.Render(spaces(gap)) + tabs)
+}
+
+func spaces(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = ' '
+	}
+	return string(b)
 }

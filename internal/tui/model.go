@@ -39,6 +39,7 @@ type Model struct {
 	spinner spinner.Model
 
 	syncing     bool
+	everSynced  bool // false only during the very first sync — shows the full splash
 	quotaSpent  int
 	quotaBudget int
 	statusMsg   string
@@ -71,15 +72,14 @@ type Model struct {
 
 // New builds the initial (pre-sync) model.
 func New(cfg *config.Config) Model {
-	newListModel := func(title string) list.Model {
+	newListModel := func() list.Model {
 		del := list.NewDefaultDelegate()
 		del.Styles.SelectedTitle = styleSelected.Foreground(colorAccent)
 		del.Styles.SelectedDesc = styleSelected.Foreground(colorMuted)
 		del.Styles.NormalTitle = lipgloss.NewStyle().Padding(0, 0, 0, 2)
 		del.Styles.NormalDesc = lipgloss.NewStyle().Padding(0, 0, 0, 2)
 		l := list.New(nil, del, 0, 0)
-		l.Title = title
-		l.Styles.Title = styleHeader
+		l.SetShowTitle(false)
 		l.SetShowStatusBar(false)
 		l.SetShowHelp(false)
 		return l
@@ -91,16 +91,20 @@ func New(cfg *config.Config) Model {
 	ti := textinput.New()
 	ti.Placeholder = "playlist title"
 
+	playlistItemsList := newListModel()
+	playlistItemsList.SetShowTitle(true)
+	playlistItemsList.Styles.Title = styleDialogTitle.Background(colorBG)
+
 	return Model{
 		cfg:               cfg,
 		store:             store.New(cfg.StoreDir),
 		keys:              newKeyMap(),
-		feedList:          newListModel("unspool · feed"),
-		queueList:         newListModel("unspool · queue"),
-		playlistsList:     newListModel("unspool · playlists"),
-		playlistItemsList: newListModel(""),
-		likedList:         newListModel("unspool · liked"),
-		pickerList:        newListModel("add to playlist"),
+		feedList:          newListModel(),
+		queueList:         newListModel(),
+		playlistsList:     newListModel(),
+		playlistItemsList: playlistItemsList,
+		likedList:         newListModel(),
+		pickerList:        newListModel(),
 		spinner:           sp,
 		syncing:           true,
 		quotaBudget:       api.DailyQuota,
@@ -207,6 +211,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 	m.syncing = false
+	m.everSynced = true
 	if msg.err != nil {
 		m.statusMsg = "sync failed: " + msg.err.Error()
 		return m, nil
@@ -279,7 +284,7 @@ func clearScreenCmd() tea.Cmd {
 }
 
 func listHeight(totalHeight int) int {
-	h := totalHeight - 3 // tab bar + status bar
+	h := totalHeight - 2 // header + status bar
 	if h < 0 {
 		return 0
 	}
@@ -306,29 +311,32 @@ func modalListSize(termWidth, termHeight int) (int, int) {
 }
 
 func (m Model) View() tea.View {
-	tabBar := renderTabBar(m.activeTab, m.width)
-
-	var body string
-	if m.syncing && m.activeTab == tabFeed {
-		body = m.spinner.View() + " " + m.statusMsg
-	} else {
-		body = m.viewActiveTab()
-	}
-
-	status := styleStatusBar.Width(m.width).Render(m.statusLine())
-
-	view := lipgloss.JoinVertical(lipgloss.Left, tabBar, body, status)
-
+	var view string
 	switch {
+	case m.syncing && !m.everSynced:
+		view = m.viewSplash()
 	case m.pickerActive:
 		view = m.overlayModal(m.renderPicker())
 	case m.creatingPlaylist:
 		view = m.overlayModal(m.renderCreatePlaylist())
+	default:
+		header := renderHeader(m.activeTab, m.width)
+		status := styleStatusBar.Width(m.width).Render(m.statusLine())
+		view = lipgloss.JoinVertical(lipgloss.Left, header, m.viewActiveTab(), status)
 	}
 
 	v := tea.NewView(view)
 	v.AltScreen = true
 	return v
+}
+
+// viewSplash renders the startup screen shown only during the very first
+// sync — the gradient logo above a dialog with a spinner, mirroring wwlog's
+// splash/loading screens.
+func (m Model) viewSplash() string {
+	dialog := renderDialog("unspool", styleSplashSub.Render(m.spinner.View()+"  Syncing your subscriptions…"), "ctrl+c to quit")
+	content := lipgloss.JoinVertical(lipgloss.Center, renderGradientLogo(), "", dialog)
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
 func (m Model) statusLine() string {
@@ -345,9 +353,8 @@ func (m Model) statusLine() string {
 	return fmt.Sprintf("%s   quota %d/%d   %s", hints, m.quotaSpent, m.quotaBudget, m.statusMsg)
 }
 
-func (m Model) overlayModal(modal string) string {
-	box := styleModal.Render(modal)
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+func (m Model) overlayModal(dialog string) string {
+	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
 // playSelected launches mpv on the currently selected video, whichever tab
