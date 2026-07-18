@@ -10,8 +10,7 @@ filter.
 
 ## Status
 
-**Pre-release, M1 in progress** (read-only feed). Not yet on Homebrew — build from source or
-grab a [release binary](https://github.com/ali5ter/unspool/releases) for now.
+**v1.0.0 — M1 shipped** (read-only feed). M2 (Queue, playlists, mute, likes) is next.
 
 ## Features (target, per milestone)
 
