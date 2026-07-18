@@ -30,6 +30,10 @@ type Video struct {
 	DurationSeconds        int       `json:"duration_seconds"`
 	Portrait               bool      `json:"portrait,omitempty"`
 	ContainsSyntheticMedia bool      `json:"contains_synthetic_media,omitempty"`
+	// ChannelTitle is a display-only convenience, not persisted — populated
+	// by read paths (e.g. liked videos) that get it for free from the API
+	// but don't otherwise cache channel titles per video.
+	ChannelTitle string `json:"-"`
 }
 
 // VideosFile is the on-disk shape of videos/<channel_id>.json.
@@ -42,6 +46,7 @@ type VideosFile struct {
 type VideoState struct {
 	Seen          bool    `json:"seen"`
 	Hidden        bool    `json:"hidden"`
+	Liked         bool    `json:"liked,omitempty"`
 	AIScore       float64 `json:"ai_score,omitempty"`
 	SyntheticFlag bool    `json:"synthetic_flag,omitempty"`
 }

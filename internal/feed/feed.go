@@ -13,6 +13,7 @@ import (
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/api"
 	"github.com/ali5ter/unspool/internal/auth"
+	"github.com/ali5ter/unspool/internal/queue"
 	"github.com/ali5ter/unspool/internal/store"
 )
 
@@ -33,6 +34,7 @@ type Result struct {
 	QuotaSpent      int
 	QuotaBudget     int
 	SkippedChannels []string // channels whose fetch failed this run; sync continued
+	MirrorErr       error    // non-nil if the Queue mirror reconciliation failed this run
 }
 
 // Sync refreshes subscriptions and per-channel video caches from the API,
@@ -108,11 +110,16 @@ func Sync(ctx context.Context, cfg *config.Config) (*Result, error) {
 		return items[i].Video.PublishedAt.After(items[j].Video.PublishedAt)
 	})
 
+	// Mirror drift is recoverable on the next sync — don't fail the whole
+	// feed refresh over it.
+	mirrorErr := queue.SyncMirror(ctx, client, st, cfg)
+
 	return &Result{
 		Items:           items,
 		QuotaSpent:      client.Quota.Spent(),
 		QuotaBudget:     api.DailyQuota,
 		SkippedChannels: skipped,
+		MirrorErr:       mirrorErr,
 	}, nil
 }
 

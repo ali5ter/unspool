@@ -112,6 +112,18 @@ func (s *Store) SaveFeedState(f FeedStateFile) error {
 	return saveJSON(s.path("feed_state.json"), f)
 }
 
+// SetVideoLiked updates the liked flag for a single video in feed_state.json.
+func (s *Store) SetVideoLiked(videoID string, liked bool) error {
+	f, err := s.LoadFeedState()
+	if err != nil {
+		return err
+	}
+	state := f.State[videoID]
+	state.Liked = liked
+	f.State[videoID] = state
+	return s.SaveFeedState(f)
+}
+
 // LoadQueue reads queue.json.
 func (s *Store) LoadQueue() (QueueFile, error) {
 	f, err := loadJSON[QueueFile](s.path("queue.json"))
@@ -160,6 +172,37 @@ func (s *Store) LoadMutes() (MutesFile, error) {
 func (s *Store) SaveMutes(f MutesFile) error {
 	f.SchemaVersion = schemaVersion
 	return saveJSON(s.path("mutes.json"), f)
+}
+
+// MuteChannel adds channelID to mutes.json if not already present.
+func (s *Store) MuteChannel(channelID string) error {
+	f, err := s.LoadMutes()
+	if err != nil {
+		return err
+	}
+	for _, id := range f.ChannelIDs {
+		if id == channelID {
+			return nil
+		}
+	}
+	f.ChannelIDs = append(f.ChannelIDs, channelID)
+	return s.SaveMutes(f)
+}
+
+// UnmuteChannel removes channelID from mutes.json.
+func (s *Store) UnmuteChannel(channelID string) error {
+	f, err := s.LoadMutes()
+	if err != nil {
+		return err
+	}
+	out := f.ChannelIDs[:0]
+	for _, id := range f.ChannelIDs {
+		if id != channelID {
+			out = append(out, id)
+		}
+	}
+	f.ChannelIDs = out
+	return s.SaveMutes(f)
 }
 
 // LoadPlaylistsCache reads playlists_cache.json.

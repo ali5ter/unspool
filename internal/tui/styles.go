@@ -28,4 +28,9 @@ var (
 	styleSelected = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, false, true).
 			BorderForeground(colorAccent).Padding(0, 0, 0, 1)
+	styleTabActive   = lipgloss.NewStyle().Foreground(colorBG).Background(colorAccent).Bold(true)
+	styleTabInactive = lipgloss.NewStyle().Foreground(colorMuted)
+	styleModal       = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(colorAccent).Padding(1, 2)
 )

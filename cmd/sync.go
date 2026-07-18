@@ -18,5 +18,8 @@ func runSync(cfg *config.Config) error {
 	if len(result.SkippedChannels) > 0 {
 		fmt.Printf("skipped %d channel(s) this run: %v\n", len(result.SkippedChannels), result.SkippedChannels)
 	}
+	if result.MirrorErr != nil {
+		fmt.Printf("queue mirror sync failed: %v\n", result.MirrorErr)
+	}
 	return nil
 }
