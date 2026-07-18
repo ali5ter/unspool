@@ -7,6 +7,7 @@ import "charm.land/bubbles/v2/key"
 type keyMap struct {
 	Play      key.Binding
 	AudioOnly key.Binding
+	Stop      key.Binding
 	Sync      key.Binding
 	Quit      key.Binding
 	NextTab   key.Binding
@@ -25,6 +26,7 @@ func newKeyMap() keyMap {
 	return keyMap{
 		Play:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("↵", "play")),
 		AudioOnly: key.NewBinding(key.WithKeys("A"), key.WithHelp("A", "audio-only")),
+		Stop:      key.NewBinding(key.WithKeys("S"), key.WithHelp("S", "stop playback")),
 		Sync:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "sync")),
 		Quit:      key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
 		NextTab:   key.NewBinding(key.WithKeys("tab"), key.WithHelp("tab", "next tab")),

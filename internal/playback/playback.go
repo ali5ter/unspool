@@ -4,6 +4,7 @@ package playback
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -23,10 +24,16 @@ func (e *ErrMissingDependency) Error() string {
 // Play launches mpv on the given video (mpv shells out to yt-dlp as its
 // stream backend automatically) and records the launch in the watch log.
 // Detached (fire-and-forget) or blocking is controlled by cfg.PlaybackDetached.
-func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, audioOnly bool) error {
+//
+// Returns the spawned process when detached, so a caller can kill it later —
+// mpv opens its own native window, which on macOS often doesn't take focus
+// when launched from a background process, leaving it unreachable by mouse
+// or keyboard. Without a way to kill it from here, that's a stuck,
+// unstoppable video with only "quit the whole terminal session" as a way out.
+func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, audioOnly bool) (*os.Process, error) {
 	mpvPath, err := exec.LookPath("mpv")
 	if err != nil {
-		return &ErrMissingDependency{Bin: "mpv"}
+		return nil, &ErrMissingDependency{Bin: "mpv"}
 	}
 
 	args := buildArgs(cfg, audioOnly)
@@ -39,13 +46,24 @@ func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, au
 		Channel:   channel,
 		StartedAt: time.Now(),
 	}); entryErr != nil {
-		return fmt.Errorf("record watch log: %w", entryErr)
+		return nil, fmt.Errorf("record watch log: %w", entryErr)
 	}
 
 	if cfg.PlaybackDetached {
-		return cmd.Start()
+		if err := cmd.Start(); err != nil {
+			return nil, err
+		}
+		return cmd.Process, nil
 	}
-	return cmd.Run()
+	return nil, cmd.Run()
+}
+
+// Stop kills a process returned by Play. Safe to call with nil (no-op).
+func Stop(p *os.Process) error {
+	if p == nil {
+		return nil
+	}
+	return p.Kill()
 }
 
 func buildArgs(cfg *config.Config, audioOnly bool) []string {

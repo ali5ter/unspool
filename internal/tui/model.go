@@ -6,6 +6,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -76,6 +77,10 @@ type Model struct {
 	previewVideoID   string
 	previewContent   string
 	previewWidthUsed int
+
+	// playingProcess is the currently-running mpv process, if any — tracked
+	// so the Stop key can kill it even if its window never took focus.
+	playingProcess *os.Process
 }
 
 // New builds the initial (pre-sync) model.
@@ -222,10 +227,21 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case likedLoadedMsg:
 		return m.handleLikedLoaded(msg)
 
+	case playbackStartedMsg:
+		m.playingProcess = msg.process
+		m.statusMsg = "playing…"
+		return m, nil
+
 	case tea.KeyPressMsg:
 		// Quit must always work, no matter what overlay or state is active
-		// — no sub-handler below this point is allowed to swallow it.
+		// — no sub-handler below this point is allowed to swallow it. Also
+		// stop any running mpv first: it's launched detached (fire-and-
+		// forget) for responsiveness within a session, not to persist
+		// invisibly once the user is done with unspool entirely — an
+		// orphaned background mpv process with an unreachable window is
+		// exactly the stuck-video problem the Stop key exists to solve.
 		if key.Matches(msg, m.keys.Quit) {
+			_ = playback.Stop(m.playingProcess)
 			return m, tea.Quit
 		}
 		if m.creatingPlaylist {
@@ -286,6 +302,9 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 // earlier, in updateInner, so every overlay/state sees it first.
 func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 	switch {
+	case key.Matches(msg, m.keys.Stop):
+		next, cmd := m.stopPlayback()
+		return true, next.(Model), cmd
 	case key.Matches(msg, m.keys.Sync):
 		m.syncing = true
 		m.statusMsg = "syncing…"
@@ -417,6 +436,9 @@ func (m Model) statusLine() string {
 	if m.activeTab == tabPlaylists && !m.viewingPlaylist {
 		hints = "↵ open  n new  tab switch  q quit"
 	}
+	if m.playingProcess != nil {
+		hints = "S stop  " + hints
+	}
 	return fmt.Sprintf("%s   quota %d/%d   %s", hints, m.quotaSpent, m.quotaBudget, m.statusMsg)
 }
 
@@ -426,18 +448,47 @@ func (m Model) overlayModal(dialog string) string {
 
 // playSelected launches mpv on the currently selected video, whichever tab
 // it's selected from.
+// playbackStartedMsg carries the spawned mpv process back to the model so
+// it can be killed later via the Stop key — mpv's window frequently doesn't
+// take focus when launched from a background process (a macOS quirk), and
+// without this there'd be no way to stop a stuck, unreachable video short
+// of quitting the whole terminal session.
+type playbackStartedMsg struct {
+	process *os.Process
+}
+
 func (m Model) playSelected(audioOnly bool) tea.Cmd {
 	video, channel, ok := m.selectedVideo()
 	if !ok {
 		return nil
 	}
 	cfg, st := m.cfg, m.store
-	return func() tea.Msg {
-		if err := playback.Play(cfg, st, video, channel, audioOnly); err != nil {
+	launch := func() tea.Msg {
+		process, err := playback.Play(cfg, st, video, channel, audioOnly)
+		if err != nil {
 			return statusErrMsg{err: err}
 		}
-		return statusErrMsg{text: "playing…"}
+		return playbackStartedMsg{process: process}
 	}
+	// mpv/yt-dlp startup (process spawn, stream resolution) isn't instant —
+	// without this, the UI shows no change at all until launch finishes,
+	// which reads as "nothing happened" even for a sub-second delay.
+	immediate := func() tea.Msg { return statusErrMsg{text: "opening mpv…"} }
+	return tea.Batch(immediate, launch)
+}
+
+func (m Model) stopPlayback() (tea.Model, tea.Cmd) {
+	if m.playingProcess == nil {
+		m.statusMsg = "nothing playing"
+		return m, nil
+	}
+	err := playback.Stop(m.playingProcess)
+	m.playingProcess = nil
+	if err != nil {
+		return m, func() tea.Msg { return statusErrMsg{err: err} }
+	}
+	m.statusMsg = "stopped"
+	return m, nil
 }
 
 // selectedVideo returns the video (and its channel title, where known)
