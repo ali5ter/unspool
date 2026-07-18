@@ -89,6 +89,11 @@ func New(cfg *config.Config) Model {
 		l.SetShowTitle(false)
 		l.SetShowStatusBar(false)
 		l.SetShowHelp(false)
+		// bubbles/list's built-in filter (bound to "/") isn't part of
+		// unspool's own key scheme and was never disabled — an errant "/"
+		// dropped users into its filter UI unexpectedly (PRD's own "/"
+		// filter action, when built, should be unspool's own, not this).
+		l.SetFilteringEnabled(false)
 		return l
 	}
 
@@ -227,11 +232,20 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
+	// The splash screen (logo + dialog) is a completely different content
+	// shape from the main tabbed view — same class of stale-glyph bleed-
+	// through as the modal transitions, so force a full repaint whenever
+	// this sync is the one taking us out of it.
+	var cmd tea.Cmd
+	if !m.everSynced {
+		cmd = clearScreenCmd()
+	}
+
 	m.syncing = false
 	m.everSynced = true
 	if msg.err != nil {
 		m.statusMsg = "sync failed: " + msg.err.Error()
-		return m, nil
+		return m, cmd
 	}
 	m.quotaSpent = msg.result.QuotaSpent
 
@@ -252,7 +266,7 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 	default:
 		m.statusMsg = "synced"
 	}
-	return m, nil
+	return m, cmd
 }
 
 // handleGlobalKey handles keys valid regardless of the active tab. Returns

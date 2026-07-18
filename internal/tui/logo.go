@@ -28,9 +28,24 @@ func lerpColor(a, b color.Color, t float64) color.Color {
 }
 
 // renderGradientLogo renders asciiLogo with a gradient from teal (new) to
-// the accent red, top to bottom.
+// the accent red, top to bottom. Each line is padded to the widest line's
+// width before rendering — cfonts letterforms aren't uniform width per row
+// (e.g. this font's bottom row runs 2 cells wider than the top two), and
+// relying on trailing whitespace surviving inside the Go source is fragile;
+// centering (JoinVertical(Center, ...)) needs equal-width lines or the
+// logo appears to shift sideways row to row.
 func renderGradientLogo() string {
-	lines := strings.Split(strings.TrimLeft(asciiLogo, "\n"), "\n")
+	lines := strings.Split(strings.TrimRight(strings.TrimLeft(asciiLogo, "\n"), "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " ")
+	}
+	maxWidth := 0
+	for _, line := range lines {
+		if w := lipgloss.Width(line); w > maxWidth {
+			maxWidth = w
+		}
+	}
+
 	n := len(lines) - 1
 	if n < 1 {
 		n = 1
@@ -39,7 +54,8 @@ func renderGradientLogo() string {
 	for i, line := range lines {
 		t := float64(i) / float64(n)
 		c := lerpColor(colorTeal, colorAccent, t)
-		rendered[i] = lipgloss.NewStyle().Foreground(c).Bold(true).Render(line)
+		padded := line + strings.Repeat(" ", maxWidth-lipgloss.Width(line))
+		rendered[i] = lipgloss.NewStyle().Foreground(c).Bold(true).Render(padded)
 	}
 	return strings.Join(rendered, "\n")
 }
