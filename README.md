@@ -10,8 +10,7 @@ filter.
 
 ## Status
 
-**Pre-release, M1 in progress** (read-only feed). Not yet on Homebrew — build from source or
-grab a [release binary](https://github.com/ali5ter/unspool/releases) for now.
+**Pre-release, M1 in progress** (read-only feed).
 
 ## Features (target, per milestone)
 
@@ -28,6 +27,12 @@ grab a [release binary](https://github.com/ali5ter/unspool/releases) for now.
 - **Pipeline mode** — `--json`, `--export`, `--sync`, `--offline` for scripting
 
 ## Installation
+
+```bash
+brew install ali5ter/tap/unspool
+```
+
+Or install via Go:
 
 ```bash
 go install github.com/ali5ter/unspool@latest
