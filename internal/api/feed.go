@@ -79,11 +79,13 @@ func publishedTime(item *gofeed.Item) time.Time {
 type VideoDetail struct {
 	DurationSeconds        int
 	ContainsSyntheticMedia bool
+	Description            string
 }
 
 // FetchVideoDetails batches videos.list calls (50 IDs/call, 1 unit/call) to
-// fetch duration and provenance metadata. Duration feeds the Shorts fallback
-// guard (IsLikelyShort) in case the UULF convention ever breaks.
+// fetch duration, provenance, and description metadata. Duration feeds the
+// Shorts fallback guard (IsLikelyShort) in case the UULF convention ever
+// breaks; description powers the preview pane.
 func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[string]VideoDetail, error) {
 	out := make(map[string]VideoDetail, len(videoIDs))
 
@@ -91,7 +93,7 @@ func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[
 		end := min(i+50, len(videoIDs))
 		batch := videoIDs[i:end]
 
-		resp, err := c.yt.Videos.List([]string{"contentDetails", "status"}).Id(batch...).Context(ctx).Do()
+		resp, err := c.yt.Videos.List([]string{"snippet", "contentDetails", "status"}).Id(batch...).Context(ctx).Do()
 		if err != nil {
 			return nil, fmt.Errorf("list video details: %w", err)
 		}
@@ -104,6 +106,9 @@ func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[
 			}
 			if item.Status != nil {
 				detail.ContainsSyntheticMedia = item.Status.ContainsSyntheticMedia
+			}
+			if item.Snippet != nil {
+				detail.Description = item.Snippet.Description
 			}
 			out[item.Id] = detail
 		}

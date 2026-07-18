@@ -30,6 +30,10 @@ type Video struct {
 	DurationSeconds        int       `json:"duration_seconds"`
 	Portrait               bool      `json:"portrait,omitempty"`
 	ContainsSyntheticMedia bool      `json:"contains_synthetic_media,omitempty"`
+	// DetailsFetched marks that FetchVideoDetails has run for this video, so
+	// a genuinely blank description (some creators leave it empty) doesn't
+	// look "unfetched" forever and get re-requested on every sync.
+	DetailsFetched bool `json:"details_fetched,omitempty"`
 	// ChannelTitle is a display-only convenience, not persisted — populated
 	// by read paths (e.g. liked videos) that get it for free from the API
 	// but don't otherwise cache channel titles per video.

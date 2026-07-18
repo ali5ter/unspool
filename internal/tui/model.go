@@ -68,6 +68,13 @@ type Model struct {
 	newPlaylistInput textinput.Model
 
 	likedLoaded bool
+
+	// Preview pane (PRD §7.1) — cached and only recomputed when the
+	// selected item or width changes, since Glamour rendering isn't cheap
+	// enough to redo on every View() call.
+	previewVideoID   string
+	previewContent   string
+	previewWidthUsed int
 }
 
 // New builds the initial (pre-sync) model.
@@ -149,16 +156,26 @@ func runSync(cfg *config.Config) tea.Cmd {
 	}
 }
 
+// Update handles a message and refreshes the cached preview afterward, so
+// View() never has to re-run Glamour rendering itself.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.updateInner(msg)
+	nm := next.(Model)
+	nm.refreshPreview()
+	return nm, cmd
+}
+
+func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		h := listHeight(msg.Height)
-		m.feedList.SetSize(msg.Width, h)
-		m.queueList.SetSize(msg.Width, h)
-		m.playlistsList.SetSize(msg.Width, h)
-		m.playlistItemsList.SetSize(msg.Width, h)
-		m.likedList.SetSize(msg.Width, h)
+		lw := listWidthFor(msg.Width)
+		m.feedList.SetSize(lw, h)
+		m.queueList.SetSize(lw, h)
+		m.playlistsList.SetSize(lw, h)
+		m.playlistItemsList.SetSize(lw, h)
+		m.likedList.SetSize(lw, h)
 		m.pickerList.SetSize(modalListSize(msg.Width, msg.Height))
 		return m, nil
 
@@ -275,6 +292,15 @@ func (m *Model) onTabChanged() tea.Cmd {
 	return nil
 }
 
+// listWidthFor returns the list pane's width given the total terminal
+// width, accounting for the preview pane when it's wide enough to show.
+func listWidthFor(totalWidth int) int {
+	if totalWidth < previewMinWidth {
+		return totalWidth
+	}
+	return totalWidth - previewWidth(totalWidth)
+}
+
 // clearScreenCmd forces a full repaint rather than a differential redraw.
 // Used around modal open/close transitions, where the content shape changes
 // drastically frame-to-frame and the renderer's diffing can otherwise leave
@@ -322,7 +348,11 @@ func (m Model) View() tea.View {
 	default:
 		header := renderHeader(m.activeTab, m.width)
 		status := styleStatusBar.Width(m.width).Render(m.statusLine())
-		view = lipgloss.JoinVertical(lipgloss.Left, header, m.viewActiveTab(), status)
+		body := m.viewActiveTab()
+		if m.width >= previewMinWidth {
+			body = lipgloss.JoinHorizontal(lipgloss.Top, m.renderPreviewPane(listHeight(m.height)), body)
+		}
+		view = lipgloss.JoinVertical(lipgloss.Left, header, body, status)
 	}
 
 	v := tea.NewView(view)

@@ -150,10 +150,22 @@ func syncChannel(ctx context.Context, client *api.Client, st *store.Store, cfg *
 	if len(needDetails) > 0 {
 		details, derr := client.FetchVideoDetails(ctx, needDetails)
 		if derr == nil {
+			needSet := make(map[string]bool, len(needDetails))
+			for _, id := range needDetails {
+				needSet[id] = true
+			}
 			for j := range merged {
+				if !needSet[merged[j].VideoID] {
+					continue
+				}
+				// Mark fetched even if this ID is absent from the response
+				// (e.g. a deleted/private video) — otherwise it would be
+				// retried on every future sync indefinitely.
+				merged[j].DetailsFetched = true
 				if d, ok := details[merged[j].VideoID]; ok {
 					merged[j].DurationSeconds = d.DurationSeconds
 					merged[j].ContainsSyntheticMedia = d.ContainsSyntheticMedia
+					merged[j].Description = d.Description
 				}
 			}
 		}

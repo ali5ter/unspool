@@ -4,9 +4,11 @@ import "github.com/ali5ter/unspool/internal/store"
 
 // mergeVideos combines cached videos with freshly fetched ones, deduplicating
 // by video ID and preferring existing entries (which may already carry
-// duration/provenance data) while refreshing mutable fields like title.
-// Returns the merged set plus the IDs still missing duration, for batching
-// through FetchVideoDetails.
+// duration/provenance/description data) while refreshing mutable fields like
+// title. Returns the merged set plus the IDs that have never had
+// FetchVideoDetails run for them, for batching. Videos cached before the
+// preview pane shipped predate DetailsFetched, so this also backfills their
+// descriptions — a one-time cost the next time each channel syncs.
 func mergeVideos(existing, fresh []store.Video) ([]store.Video, []string) {
 	byID := make(map[string]store.Video, len(existing)+len(fresh))
 	order := make([]string, 0, len(existing)+len(fresh))
@@ -30,7 +32,7 @@ func mergeVideos(existing, fresh []store.Video) ([]store.Video, []string) {
 	for _, id := range order {
 		v := byID[id]
 		merged = append(merged, v)
-		if v.DurationSeconds == 0 {
+		if !v.DetailsFetched {
 			needDetails = append(needDetails, id)
 		}
 	}
