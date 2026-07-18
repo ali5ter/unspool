@@ -29,6 +29,12 @@ filter.
 ## Installation
 
 ```bash
+brew install ali5ter/tap/unspool
+```
+
+Or install via Go:
+
+```bash
 go install github.com/ali5ter/unspool@latest
 ```
 
