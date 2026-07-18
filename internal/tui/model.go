@@ -6,6 +6,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -94,6 +95,12 @@ func New(cfg *config.Config) Model {
 		// dropped users into its filter UI unexpectedly (PRD's own "/"
 		// filter action, when built, should be unspool's own, not this).
 		l.SetFilteringEnabled(false)
+		// The built-in paginator ("1/127") adds a row list.View() doesn't
+		// account for in listHeight()'s budget, which was silently pushing
+		// our own status bar off the bottom of the terminal on long feeds
+		// (1000+ items). Scrolling/paging itself still works without the
+		// indicator — this just hides the extra row.
+		l.SetShowPagination(false)
 		return l
 	}
 
@@ -216,6 +223,11 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleLikedLoaded(msg)
 
 	case tea.KeyPressMsg:
+		// Quit must always work, no matter what overlay or state is active
+		// — no sub-handler below this point is allowed to swallow it.
+		if key.Matches(msg, m.keys.Quit) {
+			return m, tea.Quit
+		}
 		if m.creatingPlaylist {
 			return m.updateCreatingPlaylist(msg)
 		}
@@ -270,11 +282,10 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleGlobalKey handles keys valid regardless of the active tab. Returns
-// handled=false to fall through to tab-specific handling.
+// handled=false to fall through to tab-specific handling. Quit is handled
+// earlier, in updateInner, so every overlay/state sees it first.
 func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 	switch {
-	case key.Matches(msg, m.keys.Quit):
-		return true, m, tea.Quit
 	case key.Matches(msg, m.keys.Sync):
 		m.syncing = true
 		m.statusMsg = "syncing…"
@@ -316,11 +327,23 @@ func listWidthFor(totalWidth int) int {
 }
 
 // clearScreenCmd forces a full repaint rather than a differential redraw.
-// Used around modal open/close transitions, where the content shape changes
-// drastically frame-to-frame and the renderer's diffing can otherwise leave
-// stale glyphs behind.
+// Used around modal open/close transitions and the splash-to-main handoff,
+// where the content shape changes drastically frame-to-frame and the
+// renderer's diffing can otherwise leave stale glyphs behind.
+//
+// Batches an immediate ClearScreen with one delayed by a beat: Cmds are
+// dispatched to a worker goroutine and can execute either before or after
+// the synchronous render that follows the same Update() call they're
+// returned from, so the immediate one alone can occasionally lose that race
+// and leave a torn frame on screen with nothing left to trigger a
+// corrected repaint. The delayed one always lands as its own message (and
+// thus its own render cycle), guaranteeing self-correction either way.
 func clearScreenCmd() tea.Cmd {
-	return func() tea.Msg { return tea.ClearScreen() }
+	immediate := func() tea.Msg { return tea.ClearScreen() }
+	delayed := tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+		return tea.ClearScreen()
+	})
+	return tea.Batch(immediate, delayed)
 }
 
 func listHeight(totalHeight int) int {

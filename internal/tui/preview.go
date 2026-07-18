@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 )
@@ -75,13 +77,37 @@ func renderDescription(desc string, width int) string {
 }
 
 // renderPreviewPane wraps the cached preview content in the pane's fixed
-// width and padding.
+// width and padding, clipped to height. lipgloss's Height() only pads short
+// content up to the minimum — it doesn't truncate long content — so a long
+// description (which is unbounded, unlike everything else in the preview)
+// could otherwise grow the pane past its budget and push the status bar
+// (and everything below it) off the bottom of the terminal entirely.
+// clipLines handles this at the content level (with a visible "…" marker);
+// MaxHeight is a hard backstop in case the styled/padded/bordered render
+// still ends up taller than the raw line count suggests.
 func (m Model) renderPreviewPane(height int) string {
+	content := clipLines(m.previewContent, height)
 	return lipgloss.NewStyle().
 		Width(previewWidth(m.width)).
 		Height(height).
+		MaxHeight(height).
 		Padding(0, 2, 0, 1).
 		Border(lipgloss.NormalBorder(), false, true, false, false).
 		BorderForeground(colorLine).
-		Render(m.previewContent)
+		Render(content)
+}
+
+// clipLines truncates s to at most n lines, marking the cut with an
+// ellipsis on its own line when content was actually dropped.
+func clipLines(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	kept := lines[:n-1]
+	kept = append(kept, styleMeta.Render("…"))
+	return strings.Join(kept, "\n")
 }
