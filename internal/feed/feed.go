@@ -8,7 +8,10 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/api"
@@ -20,6 +23,14 @@ import (
 // backfillItems is how many videos to pull on a channel's first sync, when
 // the RSS feed's ~15-item window may not be enough.
 const backfillItems = 30
+
+// channelSyncConcurrency bounds how many channels are synced in parallel.
+// Sequential syncing (one blocking network round-trip per channel) scales
+// linearly with subscription count — observed taking 80+ seconds on a
+// ~1160-channel account, which reads as a hung app since the splash's only
+// feedback is a spinner. RSS fetches are quota-free, so the only real limit
+// is being a considerate API client.
+const channelSyncConcurrency = 20
 
 // Item is a single feed row: a video plus its channel and mutable state.
 type Item struct {
@@ -75,8 +86,14 @@ func Sync(ctx context.Context, cfg *config.Config) (*Result, error) {
 		return nil, fmt.Errorf("load feed state: %w", err)
 	}
 
-	var items []Item
-	var skipped []string
+	var (
+		mu      sync.Mutex // guards items, skipped, and feedState.State below
+		items   []Item
+		skipped []string
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(channelSyncConcurrency)
 
 	for i := range subsFile.Subscriptions {
 		sub := &subsFile.Subscriptions[i]
@@ -84,20 +101,26 @@ func Sync(ctx context.Context, cfg *config.Config) (*Result, error) {
 			continue
 		}
 
-		kept, err := syncChannel(ctx, client, st, cfg, sub.ChannelID, sub.UploadsLFPlaylistID)
-		if err != nil {
-			skipped = append(skipped, sub.Title)
-			continue
-		}
+		g.Go(func() error {
+			kept, err := syncChannel(gctx, client, st, cfg, sub.ChannelID, sub.UploadsLFPlaylistID)
 
-		sub.LastSeen = time.Now()
-		for _, v := range kept {
-			if _, seen := feedState.State[v.VideoID]; !seen {
-				feedState.State[v.VideoID] = store.VideoState{}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				skipped = append(skipped, sub.Title)
+				return nil
 			}
-			items = append(items, Item{Video: v, Channel: sub.Title, State: feedState.State[v.VideoID]})
-		}
+			sub.LastSeen = time.Now()
+			for _, v := range kept {
+				if _, seen := feedState.State[v.VideoID]; !seen {
+					feedState.State[v.VideoID] = store.VideoState{}
+				}
+				items = append(items, Item{Video: v, Channel: sub.Title, State: feedState.State[v.VideoID]})
+			}
+			return nil
+		})
 	}
+	_ = g.Wait() // syncChannel already reports its own errors via skipped; nothing to propagate
 
 	if err := st.SaveSubscriptions(subsFile); err != nil {
 		return nil, fmt.Errorf("save subscriptions: %w", err)

@@ -4,6 +4,7 @@ dist/
 *~
 .env
 *.cast
+mpv-shot*.jpg
 CLAUDE.md
 CLAUDE.md.backup.*
 AGENTS.md
