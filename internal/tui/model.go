@@ -163,7 +163,7 @@ type statusErrMsg struct {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, runSync(m.cfg))
+	return tea.Batch(m.spinner.Tick, runSync(m.cfg), warmGlamourStyleCmd)
 }
 
 func runSync(cfg *config.Config) tea.Cmd {
@@ -171,6 +171,15 @@ func runSync(cfg *config.Config) tea.Cmd {
 		result, err := feed.Sync(context.Background(), cfg)
 		return syncDoneMsg{result: result, err: err}
 	}
+}
+
+// warmGlamourStyleCmd resolves and caches the terminal's dark/light style
+// (see glamourStyleName in preview.go) off the main goroutine, during the
+// splash/sync wait, so the first preview render after sync — an ordinary
+// up/down keypress — never pays that query's cost synchronously.
+func warmGlamourStyleCmd() tea.Msg {
+	glamourStyleName()
+	return nil
 }
 
 // Update handles a message and refreshes the cached preview afterward, so

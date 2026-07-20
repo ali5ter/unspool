@@ -2,9 +2,12 @@ package tui
 
 import (
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
+	"github.com/muesli/termenv"
 )
 
 // previewMinWidth is the terminal width below which the preview pane is
@@ -58,6 +61,33 @@ func (m *Model) refreshPreview() {
 	m.previewContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
+// glamourStyleName resolves once, on first use, to "dark" or "light" and is
+// cached for the rest of the process. glamour.WithAutoStyle() re-detects
+// this on every call via termenv.HasDarkBackground(), which queries the
+// terminal (OSC 11) and blocks synchronously waiting for a reply — up to
+// termenv's 5s OSCTimeout. renderDescription runs on the main Update()
+// goroutine every time the selected video changes (i.e. on ordinary up/down
+// navigation), so re-querying per keystroke could freeze all key handling
+// for seconds at a time — confirmed live via an asciinema recording showing
+// a ~13s stall after one such query went unanswered by the terminal in
+// time. The terminal's background doesn't change mid-session, so querying
+// once and reusing the answer is both correct and the actual fix.
+var (
+	styleNameOnce sync.Once
+	styleName     string
+)
+
+func glamourStyleName() string {
+	styleNameOnce.Do(func() {
+		if termenv.HasDarkBackground() {
+			styleName = styles.DarkStyle
+		} else {
+			styleName = styles.LightStyle
+		}
+	})
+	return styleName
+}
+
 // renderDescription renders a video description as Glamour-styled markdown,
 // wrapped to width. Returns "" for an empty description rather than
 // rendering an empty block.
@@ -65,7 +95,7 @@ func renderDescription(desc string, width int) string {
 	if desc == "" {
 		return ""
 	}
-	r, err := glamour.NewTermRenderer(glamour.WithAutoStyle(), glamour.WithWordWrap(width))
+	r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(glamourStyleName()), glamour.WithWordWrap(width))
 	if err != nil {
 		return styleMeta.Render(desc)
 	}
