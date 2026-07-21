@@ -64,3 +64,14 @@ func (c *Client) CreatePlaylist(ctx context.Context, title string) (string, erro
 	c.Quota.Spend(CostWrite)
 	return resp.Id, nil
 }
+
+// DeletePlaylist deletes a playlist the user owns (playlists.delete, 50
+// units). Deleting the playlist also removes it and all its items on
+// YouTube's side — irreversible via this API.
+func (c *Client) DeletePlaylist(ctx context.Context, playlistID string) error {
+	if err := c.yt.Playlists.Delete(playlistID).Context(ctx).Do(); err != nil {
+		return fmt.Errorf("delete playlist %s: %w", playlistID, err)
+	}
+	c.Quota.Spend(CostWrite)
+	return nil
+}

@@ -9,7 +9,6 @@ package queue
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/api"
@@ -100,10 +99,10 @@ func SyncMirror(ctx context.Context, client *api.Client, st *store.Store, cfg *c
 		local[id] = true
 	}
 
-	// A just-created playlist is occasionally not yet queryable via
-	// playlistItems.list for a few seconds (observed directly against the
-	// live API, not hypothetical) — retry briefly before giving up.
-	remoteRefs, err := listPlaylistItemRefsWithRetry(ctx, client, playlistID)
+	// ListPlaylistItemRefs retries transiently on its own (a just-created
+	// playlist is occasionally not yet queryable for a few seconds — see
+	// api.retryTransient), so no retry wrapper needed here.
+	remoteRefs, err := client.ListPlaylistItemRefs(ctx, playlistID)
 	if err != nil {
 		return fmt.Errorf("list mirror playlist items: %w", err)
 	}
@@ -130,29 +129,4 @@ func SyncMirror(ctx context.Context, client *api.Client, st *store.Store, cfg *c
 	}
 
 	return nil
-}
-
-// listPlaylistItemRefsWithRetry retries ListPlaylistItemRefs a few times on
-// failure. A just-created playlist can 404 on playlistItems.list for a few
-// seconds before YouTube's backend catches up.
-func listPlaylistItemRefsWithRetry(ctx context.Context, client *api.Client, playlistID string) ([]api.PlaylistItemRef, error) {
-	const maxAttempts = 3
-	backoff := 2 * time.Second
-
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		refs, err := client.ListPlaylistItemRefs(ctx, playlistID)
-		if err == nil {
-			return refs, nil
-		}
-		lastErr = err
-		if attempt < maxAttempts {
-			select {
-			case <-time.After(backoff):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-	}
-	return nil, lastErr
 }

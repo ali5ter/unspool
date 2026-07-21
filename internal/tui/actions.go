@@ -183,6 +183,40 @@ func (m Model) handlePlaylistCreated(msg playlistCreatedMsg) (tea.Model, tea.Cmd
 	return m, nil
 }
 
+// playlistDeletedMsg carries the result of deletePlaylistCmd.
+type playlistDeletedMsg struct {
+	title string
+	err   error
+}
+
+func deletePlaylistCmd(cfg *config.Config, playlistID, title string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		client, err := newClient(ctx, cfg)
+		if err != nil {
+			return playlistDeletedMsg{title: title, err: err}
+		}
+		if err := client.DeletePlaylist(ctx, playlistID); err != nil {
+			return playlistDeletedMsg{title: title, err: err}
+		}
+		return playlistDeletedMsg{title: title}
+	}
+}
+
+// handlePlaylistDeleted reports the result of a deletion already applied
+// optimistically to playlistsList/pickerList (see updateDeletingPlaylist) —
+// consistent with every other destructive action in this app (dequeue,
+// remove-item, mute): on failure this only surfaces the error, it doesn't
+// restore the row. The row comes back on the next playlists reload.
+func (m Model) handlePlaylistDeleted(msg playlistDeletedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		m.statusMsg = "delete playlist failed: " + msg.err.Error()
+		return m, nil
+	}
+	m.statusMsg = "deleted " + msg.title
+	return m, nil
+}
+
 // addToPlaylistCmd adds a video to a playlist, used by the picker overlay.
 func addToPlaylistCmd(cfg *config.Config, playlistID, playlistTitle, videoID string) tea.Cmd {
 	return func() tea.Msg {

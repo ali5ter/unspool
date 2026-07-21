@@ -63,44 +63,50 @@ func (c *Client) FetchPlaylistItems(ctx context.Context, playlistID, channelID s
 
 // ListPlaylistItemRefs lists every item in a playlist with its playlist-item
 // ID (needed for AddPlaylistItem/RemovePlaylistItem bookkeeping), paginating
-// 50 at a time (1 unit/page).
+// 50 at a time (1 unit/page). Retries transiently on a just-created
+// playlist — see retryTransient.
 func (c *Client) ListPlaylistItemRefs(ctx context.Context, playlistID string) ([]PlaylistItemRef, error) {
 	var refs []PlaylistItemRef
-	pageToken := ""
 
-	for {
-		call := c.yt.PlaylistItems.List([]string{"snippet"}).PlaylistId(playlistID).MaxResults(50)
-		if pageToken != "" {
-			call = call.PageToken(pageToken)
-		}
-		resp, err := call.Context(ctx).Do()
-		if err != nil {
-			return nil, fmt.Errorf("list playlist items for %s: %w", playlistID, err)
-		}
-		c.Quota.Spend(CostListPage)
-
-		for _, item := range resp.Items {
-			if item.Snippet == nil || item.Snippet.ResourceId == nil {
-				continue
+	err := retryTransient(ctx, func() error {
+		refs = nil
+		pageToken := ""
+		for {
+			call := c.yt.PlaylistItems.List([]string{"snippet"}).PlaylistId(playlistID).MaxResults(50)
+			if pageToken != "" {
+				call = call.PageToken(pageToken)
 			}
-			refs = append(refs, PlaylistItemRef{
-				PlaylistItemID: item.Id,
-				VideoID:        item.Snippet.ResourceId.VideoId,
-				Title:          item.Snippet.Title,
-			})
-		}
+			resp, err := call.Context(ctx).Do()
+			if err != nil {
+				return fmt.Errorf("list playlist items for %s: %w", playlistID, err)
+			}
+			c.Quota.Spend(CostListPage)
 
-		pageToken = resp.NextPageToken
-		if pageToken == "" {
-			break
-		}
-	}
+			for _, item := range resp.Items {
+				if item.Snippet == nil || item.Snippet.ResourceId == nil {
+					continue
+				}
+				refs = append(refs, PlaylistItemRef{
+					PlaylistItemID: item.Id,
+					VideoID:        item.Snippet.ResourceId.VideoId,
+					Title:          item.Snippet.Title,
+				})
+			}
 
-	return refs, nil
+			pageToken = resp.NextPageToken
+			if pageToken == "" {
+				return nil
+			}
+		}
+	})
+	return refs, err
 }
 
 // AddPlaylistItem appends videoID to playlistID (playlistItems.insert, 50
-// units) and returns the new playlist-item ID.
+// units) and returns the new playlist-item ID. Retries transiently on a
+// just-created playlist — see retryTransient. Safe to retry: a failed
+// insert never returns an ID, so there's nothing partially applied to
+// duplicate.
 func (c *Client) AddPlaylistItem(ctx context.Context, playlistID, videoID string) (string, error) {
 	item := &youtube.PlaylistItem{
 		Snippet: &youtube.PlaylistItemSnippet{
@@ -108,12 +114,18 @@ func (c *Client) AddPlaylistItem(ctx context.Context, playlistID, videoID string
 			ResourceId: &youtube.ResourceId{Kind: "youtube#video", VideoId: videoID},
 		},
 	}
-	resp, err := c.yt.PlaylistItems.Insert([]string{"snippet"}, item).Context(ctx).Do()
-	if err != nil {
-		return "", fmt.Errorf("add video %s to playlist %s: %w", videoID, playlistID, err)
-	}
-	c.Quota.Spend(CostWrite)
-	return resp.Id, nil
+
+	var newID string
+	err := retryTransient(ctx, func() error {
+		resp, err := c.yt.PlaylistItems.Insert([]string{"snippet"}, item).Context(ctx).Do()
+		if err != nil {
+			return fmt.Errorf("add video %s to playlist %s: %w", videoID, playlistID, err)
+		}
+		c.Quota.Spend(CostWrite)
+		newID = resp.Id
+		return nil
+	})
+	return newID, err
 }
 
 // RemovePlaylistItem removes a playlist entry by its playlist-item ID

@@ -18,7 +18,30 @@ const rssTimeout = 10 * time.Second
 // FetchRSSFeed fetches the quota-free Atom feed for a Shorts-free uploads
 // playlist (UULF-prefixed). Returns only the latest ~15 items — a
 // "new since last sync" mechanism, not a backfill.
+//
+// Retries a few times with backoff on failure: this consumer-facing feed
+// endpoint (youtube.com, not the quota-tracked googleapis.com Data API) is
+// not built for bulk concurrent access and can throttle a burst of parallel
+// requests — observed directly by fetching ~1160 subscribed channels'
+// feeds concurrently, which produced a wave of spurious 404s (confirmed via
+// a direct curl of one such URL, not a parse-error guess) across roughly
+// half the account's channels. A single request retried a few times, on
+// its own schedule, is far less likely to land inside another burst's
+// throttle window than a bare unretried call.
 func FetchRSSFeed(ctx context.Context, uploadsLFPlaylistID, channelID string) ([]store.Video, error) {
+	var videos []store.Video
+	err := retryRSS(ctx, func() error {
+		v, err := fetchRSSFeedOnce(ctx, uploadsLFPlaylistID, channelID)
+		if err != nil {
+			return err
+		}
+		videos = v
+		return nil
+	})
+	return videos, err
+}
+
+func fetchRSSFeedOnce(ctx context.Context, uploadsLFPlaylistID, channelID string) ([]store.Video, error) {
 	url := fmt.Sprintf("https://www.youtube.com/feeds/videos.xml?playlist_id=%s", uploadsLFPlaylistID)
 
 	client := &http.Client{Timeout: rssTimeout}
@@ -51,6 +74,35 @@ func FetchRSSFeed(ctx context.Context, uploadsLFPlaylistID, channelID string) ([
 		})
 	}
 	return videos, nil
+}
+
+// retryRSS retries fn a few times with backoff. Every failure mode here —
+// network error, non-2xx status, or a parse failure (this endpoint returns
+// an HTML error page rather than a clean HTTP error status when throttling,
+// confirmed directly) — is treated as potentially transient, unlike
+// retryTransient's narrower googleapi.Error code check: this endpoint
+// doesn't return structured API errors at all.
+func retryRSS(ctx context.Context, fn func() error) error {
+	const maxAttempts = 3
+	backoff := 2 * time.Second
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if attempt < maxAttempts {
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			backoff *= 2
+		}
+	}
+	return lastErr
 }
 
 func extensionValue(item *gofeed.Item, namespace, key string) string {

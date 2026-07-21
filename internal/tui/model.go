@@ -69,6 +69,11 @@ type Model struct {
 	creatingPlaylist bool
 	newPlaylistInput textinput.Model
 
+	// "delete playlist" confirm overlay.
+	deletingPlaylist    bool
+	deletePlaylistID    string
+	deletePlaylistTitle string
+
 	likedLoaded bool
 
 	// Preview pane (PRD §7.1) — cached and only recomputed when the
@@ -238,6 +243,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playlistCreatedMsg:
 		return m.handlePlaylistCreated(msg)
 
+	case playlistDeletedMsg:
+		return m.handlePlaylistDeleted(msg)
+
 	case likedLoadedMsg:
 		return m.handleLikedLoaded(msg)
 
@@ -263,6 +271,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.creatingPlaylist {
 			return m.updateCreatingPlaylist(msg)
+		}
+		if m.deletingPlaylist {
+			return m.updateDeletingPlaylist(msg)
 		}
 		if m.pickerActive {
 			return m.updatePicker(msg)
@@ -484,6 +495,8 @@ func (m Model) View() tea.View {
 		view = m.overlayModal(m.renderPicker())
 	case m.creatingPlaylist:
 		view = m.overlayModal(m.renderCreatePlaylist())
+	case m.deletingPlaylist:
+		view = m.overlayModal(m.renderDeletePlaylist())
 	default:
 		header := renderHeader(m.activeTab, m.width)
 		status := styleStatusBar.Width(m.width).Render(m.statusLine())
@@ -517,7 +530,7 @@ func (m Model) statusLine() string {
 		hints = "↵ play  d remove  esc back  tab switch  q quit"
 	}
 	if m.activeTab == tabPlaylists && !m.viewingPlaylist {
-		hints = "↵ open  n new  tab switch  q quit"
+		hints = "↵ open  n new  d delete  tab switch  q quit"
 	}
 	if m.playingProcess != nil {
 		hints = "S stop  " + hints

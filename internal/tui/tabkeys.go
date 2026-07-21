@@ -87,6 +87,8 @@ func (m Model) handlePlaylistsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.creatingPlaylist = true
 		m.newPlaylistInput.SetValue("")
 		return m, tea.Batch(clearScreenCmd(), m.newPlaylistInput.Focus())
+	case key.Matches(msg, m.keys.Remove):
+		return m.confirmDeleteSelectedPlaylist()
 	}
 	var cmd tea.Cmd
 	m.playlistsList, cmd = m.playlistsList.Update(msg)
@@ -230,6 +232,50 @@ func (m Model) openSelectedPlaylist() (tea.Model, tea.Cmd) {
 	m.playlistItemsList.Title = "▸ " + sel.playlist.Title
 	m.statusMsg = "loading playlist…"
 	return m, openPlaylistCmd(m.cfg, sel.playlist.PlaylistID)
+}
+
+// confirmDeleteSelectedPlaylist opens a confirm overlay for deleting the
+// selected playlist — deletion is irreversible on YouTube's side, unlike
+// every other destructive action in this app (mute, dequeue, remove-item),
+// which is why this one gets a confirm step and those don't.
+func (m Model) confirmDeleteSelectedPlaylist() (tea.Model, tea.Cmd) {
+	sel, ok := m.playlistsList.SelectedItem().(playlistRow)
+	if !ok {
+		return m, nil
+	}
+	m.deletingPlaylist = true
+	m.deletePlaylistID = sel.playlist.PlaylistID
+	m.deletePlaylistTitle = sel.playlist.Title
+	return m, clearScreenCmd()
+}
+
+func (m Model) updateDeletingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Back):
+		m.deletingPlaylist = false
+		return m, clearScreenCmd()
+	case key.Matches(msg, m.keys.Confirm):
+		id, title := m.deletePlaylistID, m.deletePlaylistTitle
+		m.deletingPlaylist = false
+
+		items := m.playlistsList.Items()
+		kept := make([]list.Item, 0, len(items))
+		for _, it := range items {
+			if p, ok := it.(playlistRow); ok && p.playlist.PlaylistID == id {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		m.playlistsList.SetItems(kept)
+		m.pickerList.SetItems(kept)
+
+		return m, tea.Batch(clearScreenCmd(), deletePlaylistCmd(m.cfg, id, title))
+	}
+	return m, nil
+}
+
+func (m Model) renderDeletePlaylist() string {
+	return renderDialog("Delete playlist?", styleMeta.Render("\""+m.deletePlaylistTitle+"\" — this can't be undone."), "↵ delete   esc cancel")
 }
 
 func (m Model) removeSelectedFromOpenPlaylist() (tea.Model, tea.Cmd) {

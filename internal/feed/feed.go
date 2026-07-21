@@ -28,9 +28,21 @@ const backfillItems = 30
 // Sequential syncing (one blocking network round-trip per channel) scales
 // linearly with subscription count — observed taking 80+ seconds on a
 // ~1160-channel account, which reads as a hung app since the splash's only
-// feedback is a spinner. RSS fetches are quota-free, so the only real limit
-// is being a considerate API client.
-const channelSyncConcurrency = 20
+// feedback is a spinner.
+//
+// This was originally 20, which cut that 80s sync to ~2s — but on a live
+// ~1160-channel account it also triggered throttling on the RSS feed
+// endpoint (youtube.com/feeds/videos.xml): a burst of 20 concurrent
+// requests got a wave of spurious 404s back (confirmed via a direct curl
+// of one such URL, not inferred from a parse error), affecting roughly
+// half the account's channels on the next sync. Unlike the quota-tracked
+// googleapis.com Data API, this consumer-facing endpoint isn't built for
+// bulk concurrent access and has no documented budget to stay under. 6 is
+// a deliberately conservative retreat — still ~3x faster than sequential
+// per channel, but a much smaller burst. FetchRSSFeed also now retries
+// transiently on its own (internal/api/feed.go), so an occasional
+// individual failure recovers without a full resync.
+const channelSyncConcurrency = 6
 
 // Item is a single feed row: a video plus its channel and mutable state.
 type Item struct {
