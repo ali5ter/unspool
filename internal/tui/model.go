@@ -406,7 +406,7 @@ func (m Model) View() tea.View {
 		status := styleStatusBar.Width(m.width).Render(m.statusLine())
 		body := m.viewActiveTab()
 		if m.width >= previewMinWidth {
-			body = lipgloss.JoinHorizontal(lipgloss.Top, m.renderPreviewPane(listHeight(m.height)), body)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.renderPreviewPane(listHeight(m.height)))
 		}
 		view = lipgloss.JoinVertical(lipgloss.Left, header, body, status)
 	}

@@ -110,8 +110,8 @@ func (m Model) renderPreviewPane(height int) string {
 		Width(previewWidth(m.width)).
 		Height(height).
 		MaxHeight(height).
-		Padding(0, 2, 0, 1).
-		Border(lipgloss.NormalBorder(), false, true, false, false).
+		Padding(0, 1, 0, 2).
+		Border(lipgloss.NormalBorder(), false, false, false, true).
 		BorderForeground(colorLine).
 		Render(content)
 }
