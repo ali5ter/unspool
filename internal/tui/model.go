@@ -83,6 +83,7 @@ type Model struct {
 	previewVideoID   string
 	previewContent   string
 	previewWidthUsed int
+	previewScroll    int // shift+up/down — see keys.ScrollUp/ScrollDown
 
 	// playingProcess is the currently-running mpv process, if any — tracked
 	// so the Stop key can kill it even if its window never took focus.
@@ -407,9 +408,25 @@ func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 	case key.Matches(msg, m.keys.PrevTab):
 		m.activeTab = m.activeTab.prev()
 		return true, m, m.onTabChanged()
+	case key.Matches(msg, m.keys.ScrollUp):
+		m.previewScroll -= previewScrollStep
+		if m.previewScroll < 0 {
+			m.previewScroll = 0
+		}
+		return true, m, nil
+	case key.Matches(msg, m.keys.ScrollDown):
+		m.previewScroll += previewScrollStep
+		if max := previewScrollMax(m.previewContent, listHeight(m.height)); m.previewScroll > max {
+			m.previewScroll = max
+		}
+		return true, m, nil
 	}
 	return false, m, nil
 }
+
+// previewScrollStep is how many lines shift+up/down moves the preview pane
+// per press — small enough to feel like scrolling, not paging.
+const previewScrollStep = 3
 
 // onTabChanged lazily loads data the first time a tab is viewed, and
 // flushes any seen-state accumulated while the Feed tab was active — see
@@ -465,7 +482,7 @@ func clearScreenCmd() tea.Cmd {
 }
 
 func listHeight(totalHeight int) int {
-	h := totalHeight - 2 // header + status bar
+	h := totalHeight - 3 // header + 2-line status bar (hints/quota, then notice)
 	if h < 0 {
 		return 0
 	}
@@ -546,6 +563,12 @@ func (m Model) footerHints() []hint {
 	default:
 		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"m", "mute"}, {"l", "like"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	}
+	// Only relevant where the preview pane is actually visible — no point
+	// hinting a scroll key over an empty pane (or one that isn't shown at
+	// all on a narrow terminal).
+	if m.previewApplicable() && m.width >= previewMinWidth {
+		hints = append(hints, hint{"⇧↑↓", "scroll"})
+	}
 	if m.playingProcess != nil {
 		hints = append([]hint{{"S", "stop"}}, hints...)
 	}
@@ -557,6 +580,14 @@ func (m Model) footerHints() []hint {
 // the quota meter, and the status notice, tinted by what kind of message it
 // is (see statusToneColor) since a plain-grey "sync failed: ..." and a
 // plain-grey "synced" previously looked identical from across the room.
+// statusLine renders the footer's two rows: hints + quota on the first,
+// the status notice alone on the second. Previously all three shared one
+// row, which meant a long notice ("synced (3 channels skipped)") ran off
+// the edge of the terminal and got silently cropped by the outer Width()
+// wrap on anything narrower than roughly 130 columns — confirmed via a cast
+// recording showing "synced (1" with the rest of the message gone. Giving
+// the notice its own full-width row means it can never lose the race for
+// space against the hints and quota meter.
 func (m Model) statusLine() string {
 	band := lipgloss.NewStyle().Background(colorPanel)
 	keyStyle := band.Foreground(colorText).Bold(true)
@@ -570,10 +601,11 @@ func (m Model) statusLine() string {
 	left := strings.Join(parts, sep)
 
 	quota := labelStyle.Render(fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget))
-	notice := statusNoticeStyle(m.statusMsg).Render(m.statusMsg)
+	line1 := left + band.Render("   ") + quota
 
-	gap := band.Render("   ")
-	return left + gap + quota + gap + notice
+	line2 := statusNoticeStyle(m.statusMsg).Render(m.statusMsg)
+
+	return line1 + "\n" + line2
 }
 
 // statusNoticeStyle tints the status notice by what kind of message it is —

@@ -35,6 +35,7 @@ func (m *Model) refreshPreview() {
 	}
 	m.previewVideoID = video.VideoID
 	m.previewWidthUsed = m.width
+	m.previewScroll = 0
 
 	w := previewWidth(m.width) - 4 // account for padding
 	if w < 20 {
@@ -96,16 +97,23 @@ func renderDescription(desc string, width int) string {
 }
 
 // renderPreviewPane wraps the cached preview content in the pane's fixed
-// width and padding, clipped to height. lipgloss's Height() only pads short
-// content up to the minimum — it doesn't truncate long content — so a long
-// description (which is unbounded, unlike everything else in the preview)
-// could otherwise grow the pane past its budget and push the status bar
-// (and everything below it) off the bottom of the terminal entirely.
-// clipLines handles this at the content level (with a visible "…" marker);
-// MaxHeight is a hard backstop in case the styled/padded/bordered render
-// still ends up taller than the raw line count suggests.
+// width and padding, windowed to height starting at m.previewScroll (see
+// keys.ScrollUp/ScrollDown). lipgloss's Height() only pads short content up
+// to the minimum — it doesn't truncate long content — so a long description
+// (which is unbounded, unlike everything else in the preview) could
+// otherwise grow the pane past its budget and push the status bar (and
+// everything below it) off the bottom of the terminal entirely. windowLines
+// handles that at the content level; MaxHeight is a hard backstop in case
+// the styled/padded/bordered render still ends up taller than the raw line
+// count suggests.
+//
+// The clamp here is local to this render, not written back to
+// m.previewScroll — View() must not mutate model state. handleGlobalKey
+// clamps the stored value too when adjusting it, so this is a defensive
+// second pass (e.g. covering a resize that shrank height since the last
+// scroll keypress), not the only place clamping happens.
 func (m Model) renderPreviewPane(height int) string {
-	content := clipLines(m.previewContent, height)
+	content := windowLines(m.previewContent, m.previewScroll, height)
 	return lipgloss.NewStyle().
 		Width(previewWidth(m.width)).
 		Height(height).
@@ -116,9 +124,10 @@ func (m Model) renderPreviewPane(height int) string {
 		Render(content)
 }
 
-// clipLines truncates s to at most n lines, marking the cut with an
-// ellipsis on its own line when content was actually dropped.
-func clipLines(s string, n int) string {
+// windowLines returns at most n lines of s starting at offset (clamped into
+// range), marking either edge with "…" when scrolling would reveal more
+// content in that direction.
+func windowLines(s string, offset, n int) string {
 	if n <= 0 {
 		return ""
 	}
@@ -126,7 +135,39 @@ func clipLines(s string, n int) string {
 	if len(lines) <= n {
 		return s
 	}
-	kept := lines[:n-1]
-	kept = append(kept, styleMeta.Render("…"))
-	return strings.Join(kept, "\n")
+
+	maxOffset := len(lines) - n
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	end := offset + n
+
+	visible := append([]string{}, lines[offset:end]...)
+	if offset > 0 {
+		visible[0] = styleMeta.Render("…")
+	}
+	if end < len(lines) {
+		visible[len(visible)-1] = styleMeta.Render("…")
+	}
+	return strings.Join(visible, "\n")
+}
+
+// previewScrollMax returns the largest valid previewScroll for the given
+// content and visible height — clamping here (rather than only inside
+// windowLines) keeps the stored value itself always valid, so a repeated
+// ScrollDown press near the bottom is a no-op instead of silently
+// accumulating an offset far past what's ever displayed.
+func previewScrollMax(content string, height int) int {
+	if height <= 0 {
+		return 0
+	}
+	lines := strings.Count(content, "\n") + 1
+	max := lines - height
+	if max < 0 {
+		return 0
+	}
+	return max
 }
