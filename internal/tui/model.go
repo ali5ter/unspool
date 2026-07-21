@@ -262,8 +262,24 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleLikedLoaded(msg)
 
 	case playbackStartedMsg:
-		m.playingProcess = msg.process
+		m.playingProcess = msg.handle.Process()
 		m.statusMsg = "playing…"
+		return m, waitForExitCmd(msg.handle)
+
+	case playbackExitedMsg:
+		// Stale if the user has since stopped this video or started a
+		// different one — nothing to report, whatever's showing now (a
+		// new "playing…", a different error, whatever) is current and
+		// this shouldn't stomp it. mpv can fail anywhere from ~2s to 30+
+		// seconds after launch depending on why (confirmed live), so this
+		// can arrive well after the user has moved on.
+		if m.playingProcess == nil || m.playingProcess.Pid != msg.pid {
+			return m, nil
+		}
+		m.playingProcess = nil
+		if msg.err != nil {
+			m.statusMsg = "play failed: " + firstLine(msg.err.Error())
+		}
 		return m, nil
 
 	case tea.KeyPressMsg:
@@ -655,13 +671,36 @@ func (m Model) overlayModal(dialog string) string {
 
 // playSelected launches mpv on the currently selected video, whichever tab
 // it's selected from.
-// playbackStartedMsg carries the spawned mpv process back to the model so
+// playbackStartedMsg carries the launched mpv handle back to the model so
 // it can be killed later via the Stop key — mpv's window frequently doesn't
 // take focus when launched from a background process (a macOS quirk), and
 // without this there'd be no way to stop a stuck, unreachable video short
-// of quitting the whole terminal session.
+// of quitting the whole terminal session. Also used to kick off
+// waitForExitCmd — see playbackExitedMsg for why that's necessary at all.
 type playbackStartedMsg struct {
-	process *os.Process
+	handle *playback.Handle
+}
+
+// playbackExitedMsg carries the eventual result of waiting on a launched
+// mpv process. "Eventual" is doing real work in that sentence: confirmed
+// live against a real account's videos, a failure can surface anywhere
+// from ~2s to 30+ seconds after launch depending on why (extraction error
+// vs. a slow region/availability check), so this has no fixed deadline —
+// it simply reports whatever actually happened, whenever that turns out to
+// be.
+type playbackExitedMsg struct {
+	pid int
+	err error
+}
+
+// waitForExitCmd blocks (in its own goroutine, like every tea.Cmd) until
+// the given handle's process exits, then reports what happened. Previously
+// Play() itself waited up to a fixed 2s before reporting play as having
+// succeeded, which was not a safe assumption — see playbackExitedMsg.
+func waitForExitCmd(h *playback.Handle) tea.Cmd {
+	return func() tea.Msg {
+		return playbackExitedMsg{pid: h.Process().Pid, err: h.Wait()}
+	}
 }
 
 func (m Model) playSelected(audioOnly bool) tea.Cmd {
@@ -671,11 +710,11 @@ func (m Model) playSelected(audioOnly bool) tea.Cmd {
 	}
 	cfg, st := m.cfg, m.store
 	launch := func() tea.Msg {
-		process, err := playback.Play(cfg, st, video, channel, audioOnly)
+		handle, err := playback.Play(cfg, st, video, channel, audioOnly)
 		if err != nil {
 			return statusErrMsg{err: fmt.Errorf("play failed: %w", err)}
 		}
-		return playbackStartedMsg{process: process}
+		return playbackStartedMsg{handle: handle}
 	}
 	// mpv/yt-dlp startup (process spawn, stream resolution) isn't instant —
 	// without this, the UI shows no change at all until launch finishes,

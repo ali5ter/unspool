@@ -14,13 +14,6 @@ import (
 	"github.com/ali5ter/unspool/internal/store"
 )
 
-// startupGrace is how long Play waits, after launching mpv detached,
-// before reporting success. mpv is a real GUI app with its own startup
-// handshake (window creation, GPU context, yt-dlp stream resolution) — an
-// exit inside this window is treated as a launch failure, not legitimate
-// playback ending early.
-const startupGrace = 2 * time.Second
-
 // ErrMissingDependency is returned when mpv isn't on PATH.
 type ErrMissingDependency struct {
 	Bin string
@@ -30,16 +23,55 @@ func (e *ErrMissingDependency) Error() string {
 	return fmt.Sprintf("%s not found on PATH — see README for install instructions", e.Bin)
 }
 
+// Handle is a launched, detached mpv process that hasn't been waited on
+// yet. The caller decides when and how to wait for its eventual exit (see
+// Wait) — Play itself no longer guesses at this by waiting a fixed grace
+// period before reporting success, which turned out not to be safely
+// possible: confirmed live against a real account's Liked videos, mpv/
+// yt-dlp failures ("Video unavailable", extraction errors) surfaced
+// anywhere from ~2.2s to 30+ seconds after launch depending on the reason,
+// with no fixed cutoff able to safely tell a slow failure from a video
+// that's genuinely still starting up.
+type Handle struct {
+	cmd *exec.Cmd
+	out *bytes.Buffer
+}
+
+// Process returns the OS process handle, e.g. to kill it early (see Stop).
+func (h *Handle) Process() *os.Process {
+	return h.cmd.Process
+}
+
+// Wait blocks until mpv exits, returning a diagnostic error built from its
+// captured output if it exited non-zero (confirmed live: every observed
+// failure did) — a clean (zero) exit is treated as normal, whether that's
+// the video finishing or the user closing the window, since nothing mpv
+// itself flagged as wrong. The caller decides what a late failure still
+// means by the time it arrives — the user may have already stopped this
+// video or started another.
+func (h *Handle) Wait() error {
+	waitErr := h.cmd.Wait()
+	if waitErr == nil {
+		return nil
+	}
+	msg := strings.TrimSpace(h.out.String())
+	if msg == "" {
+		msg = waitErr.Error()
+	}
+	return fmt.Errorf("%s", msg)
+}
+
 // Play launches mpv on the given video (mpv shells out to yt-dlp as its
 // stream backend automatically) and records the launch in the watch log.
 // Detached (fire-and-forget) or blocking is controlled by cfg.PlaybackDetached.
 //
-// Returns the spawned process when detached, so a caller can kill it later —
-// mpv opens its own native window, which on macOS often doesn't take focus
-// when launched from a background process, leaving it unreachable by mouse
-// or keyboard. Without a way to kill it from here, that's a stuck,
-// unstoppable video with only "quit the whole terminal session" as a way out.
-func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, audioOnly bool) (*os.Process, error) {
+// Returns a Handle when detached, so a caller can kill it early (Stop) or
+// wait for its eventual exit (Handle.Wait) — mpv opens its own native
+// window, which on macOS often doesn't take focus when launched from a
+// background process, leaving it unreachable by mouse or keyboard. Without
+// a way to kill it from here, that's a stuck, unstoppable video with only
+// "quit the whole terminal session" as a way out.
+func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, audioOnly bool) (*Handle, error) {
 	mpvPath, err := exec.LookPath("mpv")
 	if err != nil {
 		return nil, &ErrMissingDependency{Bin: "mpv"}
@@ -73,37 +105,7 @@ func Play(cfg *config.Config, st *store.Store, v store.Video, channel string, au
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-
-	// mpv is launched detached (fire-and-forget, for UI responsiveness) —
-	// but cmd.Start() only reports fork/exec failures, not anything mpv
-	// itself goes wrong on afterward (a deleted/region-locked video, a
-	// yt-dlp extraction failure, a missing codec). Without this, that
-	// whole class of failure launches "successfully" at the OS level and
-	// then dies silently a moment later: the status bar says "playing…"
-	// forever, with no window, no audio, and no indication anything went
-	// wrong. Waiting briefly for an early exit catches it. The Wait() call
-	// is required regardless, detached or not — without it, mpv becomes a
-	// zombie process under unspool once it does exit.
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	select {
-	case waitErr := <-done:
-		msg := strings.TrimSpace(out.String())
-		if msg == "" && waitErr != nil {
-			msg = waitErr.Error()
-		}
-		if msg == "" {
-			msg = "mpv exited immediately with no output"
-		}
-		return nil, fmt.Errorf("%s", msg)
-	case <-time.After(startupGrace):
-		// Still running past the grace window — report success. The
-		// Wait() goroutine above keeps running to reap the process
-		// whenever it does eventually exit (naturally or via Stop);
-		// nothing left to do with that result now.
-		return cmd.Process, nil
-	}
+	return &Handle{cmd: cmd, out: &out}, nil
 }
 
 // Stop kills a process returned by Play. Safe to call with nil (no-op).
