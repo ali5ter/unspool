@@ -487,8 +487,12 @@ func clearScreenCmd() tea.Cmd {
 	return tea.Batch(immediate, delayed)
 }
 
+// footerHeight is the footer's total row count: statusLine's 2 content
+// rows plus the 1-row rule above them (styleStatusBar's top border).
+const footerHeight = 3
+
 func listHeight(totalHeight int) int {
-	h := totalHeight - headerHeight - 2 // header (logo-height) + 2-line status bar
+	h := totalHeight - headerHeight - footerHeight
 	if h < 0 {
 		return 0
 	}

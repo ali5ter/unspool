@@ -38,10 +38,15 @@ var (
 				Foreground(colorMuted).
 				Padding(0, 1)
 
+	// Top rule delineates the footer from the content above it — matches
+	// the header's own bottom rule (tabs.go) and the list/preview divider,
+	// same colorLine. Previously nothing marked this boundary either.
 	styleStatusBar = lipgloss.NewStyle().
 			Background(colorPanel).
 			Foreground(colorMuted).
-			Padding(0, 1)
+			Padding(0, 1).
+			Border(lipgloss.NormalBorder(), true, false, false, false).
+			BorderForeground(colorLine)
 
 	styleSelected = lipgloss.NewStyle().
 			Border(lipgloss.NormalBorder(), false, false, false, true).

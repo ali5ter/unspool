@@ -1,6 +1,11 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"image/color"
+	"strings"
+
+	"charm.land/lipgloss/v2"
+)
 
 // tab identifies one of the top-level TUI sections.
 type tab int
@@ -38,16 +43,29 @@ func (t tab) prev() tab {
 
 var tabLabels = [...]string{"feed", "queue", "playlists", "liked"}
 
-// headerHeight is renderHeader's row count — asciiLogo is 2 lines. Callers
-// sizing the rest of the layout (listHeight) must match this.
-const headerHeight = 2
+// logoHeight is asciiLogo's row count.
+const logoHeight = 2
 
-// renderHeader renders the header as headerHeight rows: the logo top-left,
-// then the tab strip to its right, vertically centered against the logo's
-// height. band.Width(width) pads every row (including the logo's own,
-// already-styled rows) out to the full terminal width with the same
-// background, so the gap to the right of the tabs reads as one continuous
-// band rather than stopping short where the logo/tabs content ends.
+// headerHeight is the header's total row count: logoHeight plus the 1-row
+// rule that delineates it from the content below. Callers sizing the rest
+// of the layout (listHeight) must match this.
+const headerHeight = logoHeight + 1
+
+// renderHeader renders the header: the logo top-left, the tab strip to its
+// right on the logo's bottom row, and a bottom rule (colorLine, matching
+// the list/preview divider) separating it from the content below — none of
+// the row boundaries were otherwise marked, header/content/footer all just
+// abutted directly.
+//
+// The tab strip and the gap before it are built as an explicit logoHeight-
+// row block (padTopWithBG), not left for lipgloss.JoinHorizontal to pad up
+// to the logo's height on its own: JoinHorizontal pads a shorter block
+// with plain, unstyled blank rows, not the block's own background — that
+// left a stray patch of the terminal's default background (not
+// colorPanel) sitting in the row above the tabs, wherever the gap/tabs
+// block needed padding to match the logo's height. Confirmed directly by
+// inspecting cell background attributes from a cast recording, not just
+// visually.
 func renderHeader(active tab, width int) string {
 	band := lipgloss.NewStyle().Background(colorPanel)
 	logo := renderHeaderLogo()
@@ -60,7 +78,23 @@ func renderHeader(active tab, width int) string {
 			tabs += styleTabInactive.Render(label)
 		}
 	}
+	row := band.Render("  ") + tabs
+	padded := padTopWithBG(row, logoHeight-1, colorPanel)
 
-	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, band.Render("  "), tabs)
-	return band.Width(width).Render(left)
+	left := lipgloss.JoinHorizontal(lipgloss.Bottom, logo, padded)
+	return band.Width(width).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(colorLine).
+		Render(left)
+}
+
+// padTopWithBG pads a single-line string s with extraRows blank lines
+// above it, each filled with bg for its full width, then returns the
+// result with s on the last row.
+func padTopWithBG(s string, extraRows int, bg color.Color) string {
+	if extraRows <= 0 {
+		return s
+	}
+	blank := lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", lipgloss.Width(s)))
+	return strings.Repeat(blank+"\n", extraRows) + s
 }
