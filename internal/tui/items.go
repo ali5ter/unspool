@@ -42,14 +42,28 @@ func (r playlistRow) Description() string {
 	return styleMeta.Render(fmt.Sprintf("%d video(s)", r.playlist.ItemCount))
 }
 
-// playlistItemRow is a row within an opened playlist.
+// playlistItemRow is a row within an opened playlist, resolved against the
+// last feed sync's metadata when available — same fallback shape as
+// queueRow, and for the same reason: ListPlaylistItemRefs only returns a
+// title and video ID (no channel/duration), and fetching full video
+// details for every playlist item would cost extra quota for what's
+// already sitting in memory for anything that's also in the synced feed.
+// Videos outside that window (e.g. from a muted channel, or older than the
+// feed's sync horizon) fall back to just the video ID, same as Queue rows.
 type playlistItemRow struct {
-	ref api.PlaylistItemRef
+	ref     api.PlaylistItemRef
+	video   store.Video
+	channel string
 }
 
 func (r playlistItemRow) FilterValue() string { return r.ref.Title }
 func (r playlistItemRow) Title() string       { return r.ref.Title }
-func (r playlistItemRow) Description() string { return styleMeta.Render(r.ref.VideoID) }
+func (r playlistItemRow) Description() string {
+	if r.channel == "" {
+		return styleMeta.Render(r.ref.VideoID)
+	}
+	return styleMeta.Render(fmt.Sprintf("%s · %s · %s", r.channel, humanAge(r.video.PublishedAt), humanDuration(r.video.DurationSeconds)))
+}
 
 // likedRow is a Liked-tab row: a video from videos.list(myRating=like).
 type likedRow struct {

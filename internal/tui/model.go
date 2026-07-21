@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -201,7 +202,11 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		lw := listWidthFor(msg.Width)
 		m.feedList.SetSize(lw, h)
 		m.queueList.SetSize(lw, h)
-		m.playlistsList.SetSize(lw, h)
+		// playlistsList (the top-level list of playlists, not a playlist's
+		// videos) never shares the row with a preview pane — there's no
+		// video to preview there — so it always gets the full width rather
+		// than losing a third of it to an empty "Nothing selected." pane.
+		m.playlistsList.SetSize(msg.Width, h)
 		m.playlistItemsList.SetSize(lw, h)
 		m.likedList.SetSize(lw, h)
 		m.pickerList.SetSize(modalListSize(msg.Width, msg.Height))
@@ -501,7 +506,7 @@ func (m Model) View() tea.View {
 		header := renderHeader(m.activeTab, m.width)
 		status := styleStatusBar.Width(m.width).Render(m.statusLine())
 		body := m.viewActiveTab()
-		if m.width >= previewMinWidth {
+		if m.width >= previewMinWidth && m.previewApplicable() {
 			body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.renderPreviewPane(listHeight(m.height)))
 		}
 		view = lipgloss.JoinVertical(lipgloss.Left, header, body, status)
@@ -521,21 +526,70 @@ func (m Model) viewSplash() string {
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
-func (m Model) statusLine() string {
-	hints := "↵ play  A audio  a queue  m mute  l like  p playlist  tab switch  r sync  q quit"
-	if m.activeTab == tabQueue {
-		hints = "↵ play  d remove  tab switch  r sync  q quit"
-	}
-	if m.activeTab == tabPlaylists && m.viewingPlaylist {
-		hints = "↵ play  d remove  esc back  tab switch  q quit"
-	}
-	if m.activeTab == tabPlaylists && !m.viewingPlaylist {
-		hints = "↵ open  n new  d delete  tab switch  q quit"
+// hint is one key/action pair in the status bar's key legend.
+type hint struct {
+	key, label string
+}
+
+// footerHints returns the key legend for the current tab/state — the same
+// wording as before, just structured so statusLine can style the key
+// distinctly from its label.
+func (m Model) footerHints() []hint {
+	var hints []hint
+	switch {
+	case m.activeTab == tabQueue:
+		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
+	case m.activeTab == tabPlaylists && m.viewingPlaylist:
+		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"esc", "back"}, {"tab", "switch"}, {"q", "quit"}}
+	case m.activeTab == tabPlaylists && !m.viewingPlaylist:
+		hints = []hint{{"↵", "open"}, {"n", "new"}, {"d", "delete"}, {"tab", "switch"}, {"q", "quit"}}
+	default:
+		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"m", "mute"}, {"l", "like"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	}
 	if m.playingProcess != nil {
-		hints = "S stop  " + hints
+		hints = append([]hint{{"S", "stop"}}, hints...)
 	}
-	return fmt.Sprintf("%s   quota %d/%d   %s", hints, m.quotaSpent, m.quotaBudget, m.statusMsg)
+	return hints
+}
+
+// statusLine renders the footer: a key legend (key bolded, action label
+// dim — previously rendered as one undifferentiated string, hard to scan),
+// the quota meter, and the status notice, tinted by what kind of message it
+// is (see statusToneColor) since a plain-grey "sync failed: ..." and a
+// plain-grey "synced" previously looked identical from across the room.
+func (m Model) statusLine() string {
+	band := lipgloss.NewStyle().Background(colorPanel)
+	keyStyle := band.Foreground(colorText).Bold(true)
+	labelStyle := band.Foreground(colorMuted)
+
+	parts := make([]string, 0, len(m.footerHints()))
+	for _, h := range m.footerHints() {
+		parts = append(parts, keyStyle.Render(h.key)+labelStyle.Render(" "+h.label))
+	}
+	sep := band.Render("  ")
+	left := strings.Join(parts, sep)
+
+	quota := labelStyle.Render(fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget))
+	notice := statusNoticeStyle(m.statusMsg).Render(m.statusMsg)
+
+	gap := band.Render("   ")
+	return left + gap + quota + gap + notice
+}
+
+// statusNoticeStyle tints the status notice by what kind of message it is —
+// in-progress messages consistently end in "…" already (see the statusMsg
+// assignments throughout this package), and failures consistently contain
+// "failed", so no separate tagging mechanism is needed to classify them.
+func statusNoticeStyle(msg string) lipgloss.Style {
+	style := lipgloss.NewStyle().Background(colorLine).Padding(0, 1).Bold(true)
+	switch {
+	case strings.Contains(msg, "failed"):
+		return style.Foreground(colorAccent)
+	case strings.HasSuffix(msg, "…"):
+		return style.Foreground(colorAmber)
+	default:
+		return style.Foreground(colorTeal)
+	}
 }
 
 func (m Model) overlayModal(dialog string) string {
@@ -585,6 +639,14 @@ func (m Model) stopPlayback() (tea.Model, tea.Cmd) {
 	}
 	m.statusMsg = "stopped"
 	return m, nil
+}
+
+// previewApplicable reports whether the current tab/state has a video to
+// preview at all. False only for the top-level Playlists list (browsing
+// playlists themselves, not a playlist's videos) — see the WindowSizeMsg
+// case above, where playlistsList is sized full-width to match.
+func (m Model) previewApplicable() bool {
+	return !(m.activeTab == tabPlaylists && !m.viewingPlaylist)
 }
 
 // selectedVideo returns the video (and its channel title, where known)

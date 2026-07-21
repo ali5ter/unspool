@@ -141,7 +141,12 @@ func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model,
 	}
 	items := make([]list.Item, 0, len(msg.refs))
 	for _, ref := range msg.refs {
-		items = append(items, playlistItemRow{ref: ref})
+		row := playlistItemRow{ref: ref}
+		if it, ok := m.videoIndex[ref.VideoID]; ok {
+			row.video = it.Video
+			row.channel = it.Channel
+		}
+		items = append(items, row)
 	}
 	m.playlistItemsList.SetItems(items)
 	m.viewingPlaylist = true
