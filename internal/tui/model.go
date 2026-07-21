@@ -226,7 +226,7 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case statusErrMsg:
 		if msg.err != nil {
-			m.statusMsg = msg.err.Error()
+			m.statusMsg = firstLine(msg.err.Error())
 		} else {
 			m.statusMsg = msg.text
 		}
@@ -608,6 +608,21 @@ func (m Model) statusLine() string {
 	return line1 + "\n" + line2
 }
 
+// firstLine collapses err to its first non-empty line, marking with "…" if
+// there was more. The status notice is rendered as a single row (see
+// statusLine) — some errors are naturally multi-line (mpv's own output on
+// a failed stream load prints several lines to stdout, confirmed live),
+// and without this a multi-line message would spill the notice across
+// several rows instead of the one it's laid out for.
+func firstLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	first := strings.TrimSpace(lines[0])
+	if len(lines) > 1 {
+		return first + " …"
+	}
+	return first
+}
+
 // statusNoticeStyle tints the status notice by what kind of message it is —
 // in-progress messages consistently end in "…" already (see the statusMsg
 // assignments throughout this package), and failures consistently contain
@@ -648,7 +663,7 @@ func (m Model) playSelected(audioOnly bool) tea.Cmd {
 	launch := func() tea.Msg {
 		process, err := playback.Play(cfg, st, video, channel, audioOnly)
 		if err != nil {
-			return statusErrMsg{err: err}
+			return statusErrMsg{err: fmt.Errorf("play failed: %w", err)}
 		}
 		return playbackStartedMsg{process: process}
 	}
