@@ -12,6 +12,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/paginator"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -111,12 +112,17 @@ func New(cfg *config.Config) Model {
 		// dropped users into its filter UI unexpectedly (PRD's own "/"
 		// filter action, when built, should be unspool's own, not this).
 		l.SetFilteringEnabled(false)
-		// The built-in paginator ("1/127") adds a row list.View() doesn't
-		// account for in listHeight()'s budget, which was silently pushing
-		// our own status bar off the bottom of the terminal on long feeds
-		// (1000+ items). Scrolling/paging itself still works without the
-		// indicator — this just hides the extra row.
-		l.SetShowPagination(false)
+		// The built-in paginator's row was previously disabled here after
+		// it silently pushed the status bar off-screen on long feeds — not
+		// reproducible against the current bubbles/list version (confirmed
+		// directly: list.View()'s line count matches SetSize()'s height
+		// exactly with pagination on), so re-enabled. Dots is the library's
+		// own default, which reads fine for a handful of pages but turns
+		// into a long unreadable row for a 1000+ video feed at ~6 items/
+		// page (close to 200 pages) — Arabic ("current/total") stays
+		// compact regardless of feed size.
+		l.SetShowPagination(true)
+		l.Paginator.Type = paginator.Arabic
 		return l
 	}
 
