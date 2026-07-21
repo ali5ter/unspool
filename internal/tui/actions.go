@@ -97,8 +97,19 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 		return m, nil
 	}
 
+	// The Queue auto-mirror is a real playlist on the account, so
+	// playlists.list legitimately returns it — but it's the exact same
+	// content as the dedicated Queue tab, and adding a video to it
+	// directly here would desync it from queue.json (the next mirror
+	// reconciliation would just remove it again, since it isn't in the
+	// local queue). Filtered from both the browse list and the add/move
+	// picker.
+	mirrorID := m.mirrorPlaylistID()
 	items := make([]list.Item, 0, len(msg.playlists))
 	for _, p := range msg.playlists {
+		if mirrorID != "" && p.PlaylistID == mirrorID {
+			continue
+		}
 		items = append(items, playlistRow{playlist: p})
 	}
 	m.playlistsList.SetItems(items)

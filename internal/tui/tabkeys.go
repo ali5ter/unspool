@@ -423,3 +423,18 @@ func (m Model) updateCreatingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 func (m Model) renderCreatePlaylist() string {
 	return renderDialog("New playlist", m.newPlaylistInput.View(), "↵ create   esc cancel")
 }
+
+// mirrorPlaylistID resolves the Queue auto-mirror's playlist ID, if known:
+// the configured override if set, else whatever queue.json has adopted.
+// Returns "" if neither is known (e.g. the mirror hasn't been created
+// yet) — callers should treat that as "nothing to filter."
+func (m Model) mirrorPlaylistID() string {
+	if m.cfg.Queue.MirrorPlaylistID != "" {
+		return m.cfg.Queue.MirrorPlaylistID
+	}
+	qf, err := m.store.LoadQueue()
+	if err != nil {
+		return ""
+	}
+	return qf.MirrorPlaylist
+}
