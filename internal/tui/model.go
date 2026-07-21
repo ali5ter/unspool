@@ -60,12 +60,20 @@ type Model struct {
 	openPlaylistTitle string
 	playlistsLoaded   bool
 
-	// "add to playlist" picker overlay.
-	pickerActive  bool
-	pickerVideo   store.Video
-	pickerChannel string
-	pickerPending bool // waiting on playlists to load before opening
-	pickerList    list.Model
+	// "add to playlist" picker overlay. pickerMoveItemID/pickerMoveFromID
+	// are set only when the picker was opened from inside a playlist's own
+	// item view ('p' while viewingPlaylist) — see openMovePickerForSelected
+	// — turning "add to" into "move to": confirming also removes the item
+	// from the source playlist, and the source itself is excluded from the
+	// picker's choices (moving a video to the playlist it's already in is
+	// a confusing no-op, not worth supporting).
+	pickerActive     bool
+	pickerVideo      store.Video
+	pickerChannel    string
+	pickerPending    bool // waiting on playlists to load before opening
+	pickerList       list.Model
+	pickerMoveItemID string
+	pickerMoveFromID string
 
 	// "create playlist" input overlay.
 	creatingPlaylist bool
@@ -583,7 +591,7 @@ func (m Model) footerHints() []hint {
 	case m.activeTab == tabQueue:
 		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	case m.activeTab == tabPlaylists && m.viewingPlaylist:
-		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"esc", "back"}, {"tab", "switch"}, {"q", "quit"}}
+		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"p", "move"}, {"esc", "back"}, {"tab", "switch"}, {"q", "quit"}}
 	case m.activeTab == tabPlaylists && !m.viewingPlaylist:
 		hints = []hint{{"↵", "open"}, {"n", "new"}, {"d", "delete"}, {"tab", "switch"}, {"q", "quit"}}
 	default:
@@ -764,7 +772,10 @@ func (m Model) selectedVideo() (store.Video, string, bool) {
 	case tabPlaylists:
 		if m.viewingPlaylist {
 			if sel, ok := m.playlistItemsList.SelectedItem().(playlistItemRow); ok {
-				return store.Video{VideoID: sel.ref.VideoID, Title: sel.ref.Title}, "", true
+				video := sel.video
+				video.VideoID = sel.ref.VideoID
+				video.Title = sel.ref.Title
+				return video, sel.channel, true
 			}
 		}
 	}

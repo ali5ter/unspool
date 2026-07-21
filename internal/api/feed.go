@@ -132,12 +132,17 @@ type VideoDetail struct {
 	DurationSeconds        int
 	ContainsSyntheticMedia bool
 	Description            string
+	ChannelTitle           string
+	PublishedAt            time.Time
 }
 
 // FetchVideoDetails batches videos.list calls (50 IDs/call, 1 unit/call) to
-// fetch duration, provenance, and description metadata. Duration feeds the
+// fetch duration, provenance, and metadata for videos not already known
+// from a feed sync — e.g. arbitrary playlist contents, which can be any
+// video from any channel, not just subscribed ones. Duration feeds the
 // Shorts fallback guard (IsLikelyShort) in case the UULF convention ever
-// breaks; description powers the preview pane.
+// breaks; description powers the preview pane; ChannelTitle/PublishedAt
+// are for callers (playlist item rows) that have no other source for them.
 func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[string]VideoDetail, error) {
 	out := make(map[string]VideoDetail, len(videoIDs))
 
@@ -161,6 +166,8 @@ func (c *Client) FetchVideoDetails(ctx context.Context, videoIDs []string) (map[
 			}
 			if item.Snippet != nil {
 				detail.Description = item.Snippet.Description
+				detail.ChannelTitle = item.Snippet.ChannelTitle
+				detail.PublishedAt = parseAPITimestamp(item.Snippet.PublishedAt)
 			}
 			out[item.Id] = detail
 		}

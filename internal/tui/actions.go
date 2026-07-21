@@ -102,7 +102,11 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 		items = append(items, playlistRow{playlist: p})
 	}
 	m.playlistsList.SetItems(items)
-	m.pickerList.SetItems(items)
+	if m.pickerMoveFromID != "" {
+		m.pickerList.SetItems(excludePlaylist(items, m.pickerMoveFromID))
+	} else {
+		m.pickerList.SetItems(items)
+	}
 	m.statusMsg = "loaded playlists"
 
 	if m.pickerPending {
@@ -115,10 +119,17 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 
 // playlistItemsLoadedMsg carries the result of openPlaylistCmd.
 type playlistItemsLoadedMsg struct {
-	refs []api.PlaylistItemRef
-	err  error
+	refs    []api.PlaylistItemRef
+	details map[string]api.VideoDetail
+	err     error
 }
 
+// openPlaylistCmd lists a playlist's items and, since a playlist can hold
+// any video from any channel (not just subscribed ones — m.videoIndex,
+// built from the last feed sync, essentially never has these), batches a
+// videos.list call to fetch real channel/duration/publish-date metadata
+// for all of them. Confirmed live: without this, every playlist item's
+// preview showed nothing but the bare video ID.
 func openPlaylistCmd(cfg *config.Config, playlistID string) tea.Cmd {
 	return func() tea.Msg {
 		ctx := context.Background()
@@ -130,7 +141,17 @@ func openPlaylistCmd(cfg *config.Config, playlistID string) tea.Cmd {
 		if err != nil {
 			return playlistItemsLoadedMsg{err: err}
 		}
-		return playlistItemsLoadedMsg{refs: refs}
+		ids := make([]string, len(refs))
+		for i, ref := range refs {
+			ids[i] = ref.VideoID
+		}
+		details, err := client.FetchVideoDetails(ctx, ids)
+		if err != nil {
+			// Non-fatal: fall back to bare video IDs rather than failing
+			// the whole playlist view over a metadata lookup.
+			details = nil
+		}
+		return playlistItemsLoadedMsg{refs: refs, details: details}
 	}
 }
 
@@ -142,7 +163,17 @@ func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model,
 	items := make([]list.Item, 0, len(msg.refs))
 	for _, ref := range msg.refs {
 		row := playlistItemRow{ref: ref}
-		if it, ok := m.videoIndex[ref.VideoID]; ok {
+		if d, ok := msg.details[ref.VideoID]; ok {
+			row.video = store.Video{
+				VideoID:                ref.VideoID,
+				Title:                  ref.Title,
+				DurationSeconds:        d.DurationSeconds,
+				PublishedAt:            d.PublishedAt,
+				ContainsSyntheticMedia: d.ContainsSyntheticMedia,
+				Description:            d.Description,
+			}
+			row.channel = d.ChannelTitle
+		} else if it, ok := m.videoIndex[ref.VideoID]; ok {
 			row.video = it.Video
 			row.channel = it.Channel
 		}

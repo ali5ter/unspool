@@ -7,6 +7,7 @@ import (
 
 	"github.com/ali5ter/unspool/internal/feed"
 	"github.com/ali5ter/unspool/internal/queue"
+	"github.com/ali5ter/unspool/internal/store"
 )
 
 // handleTabKey dispatches a keypress to the active tab's handler.
@@ -71,6 +72,8 @@ func (m Model) handlePlaylistsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.playSelected(true)
 		case key.Matches(msg, m.keys.Remove):
 			return m.removeSelectedFromOpenPlaylist()
+		case key.Matches(msg, m.keys.AddToList):
+			return m.openMovePickerForSelected()
 		case key.Matches(msg, m.keys.Back):
 			m.viewingPlaylist = false
 			return m, nil
@@ -305,13 +308,53 @@ func (m Model) openPickerForSelected() (Model, tea.Cmd) {
 	}
 	m.pickerVideo = video
 	m.pickerChannel = channel
+	m.pickerMoveItemID = ""
+	m.pickerMoveFromID = ""
 	if !m.playlistsLoaded {
 		m.pickerPending = true
 		m.statusMsg = "loading playlists…"
 		return m, loadPlaylistsCmd(m.cfg)
 	}
 	m.pickerActive = true
+	m.pickerList.SetItems(m.playlistsList.Items())
 	return m, clearScreenCmd()
+}
+
+// openMovePickerForSelected opens the same picker overlay as
+// openPickerForSelected, but in "move" mode: used from inside an opened
+// playlist's own item list, where there's a source to remove from and a
+// specific playlist-item ID (not just a video ID) needed to do that.
+func (m Model) openMovePickerForSelected() (Model, tea.Cmd) {
+	sel, ok := m.playlistItemsList.SelectedItem().(playlistItemRow)
+	if !ok {
+		return m, nil
+	}
+	m.pickerVideo = store.Video{VideoID: sel.ref.VideoID, Title: sel.ref.Title}
+	m.pickerChannel = sel.channel
+	m.pickerMoveItemID = sel.ref.PlaylistItemID
+	m.pickerMoveFromID = m.openPlaylistID
+	if !m.playlistsLoaded {
+		m.pickerPending = true
+		m.statusMsg = "loading playlists…"
+		return m, loadPlaylistsCmd(m.cfg)
+	}
+	m.pickerActive = true
+	m.pickerList.SetItems(excludePlaylist(m.playlistsList.Items(), m.openPlaylistID))
+	return m, clearScreenCmd()
+}
+
+// excludePlaylist returns items without the playlistRow matching
+// playlistID — used to keep a video's current playlist out of the "move
+// to…" picker's choices.
+func excludePlaylist(items []list.Item, playlistID string) []list.Item {
+	kept := make([]list.Item, 0, len(items))
+	for _, it := range items {
+		if p, ok := it.(playlistRow); ok && p.playlist.PlaylistID == playlistID {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	return kept
 }
 
 func (m Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -325,7 +368,26 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if !ok {
 			return m, clearScreenCmd()
 		}
-		return m, tea.Batch(clearScreenCmd(), addToPlaylistCmd(m.cfg, sel.playlist.PlaylistID, sel.playlist.Title, m.pickerVideo.VideoID))
+		add := addToPlaylistCmd(m.cfg, sel.playlist.PlaylistID, sel.playlist.Title, m.pickerVideo.VideoID)
+		if m.pickerMoveItemID == "" {
+			return m, tea.Batch(clearScreenCmd(), add)
+		}
+
+		// Move: also remove from the source playlist, optimistically
+		// dropping the row from the currently-open list — same pattern as
+		// removeSelectedFromOpenPlaylist.
+		itemID := m.pickerMoveItemID
+		items := m.playlistItemsList.Items()
+		kept := make([]list.Item, 0, len(items))
+		for _, it := range items {
+			if pi, ok := it.(playlistItemRow); ok && pi.ref.PlaylistItemID == itemID {
+				continue
+			}
+			kept = append(kept, it)
+		}
+		m.playlistItemsList.SetItems(kept)
+		remove := removePlaylistItemCmd(m.cfg, itemID)
+		return m, tea.Batch(clearScreenCmd(), add, remove)
 	}
 	var cmd tea.Cmd
 	m.pickerList, cmd = m.pickerList.Update(msg)
@@ -333,7 +395,11 @@ func (m Model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderPicker() string {
-	return renderDialog("Add \""+m.pickerVideo.Title+"\" to playlist", m.pickerList.View(), "↵ select   esc cancel")
+	verb := "Add"
+	if m.pickerMoveItemID != "" {
+		verb = "Move"
+	}
+	return renderDialog(verb+" \""+m.pickerVideo.Title+"\" to playlist", m.pickerList.View(), "↵ select   esc cancel")
 }
 
 func (m Model) updateCreatingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
