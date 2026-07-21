@@ -2,12 +2,10 @@ package tui
 
 import (
 	"strings"
-	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
-	"github.com/muesli/termenv"
 )
 
 // previewMinWidth is the terminal width below which the preview pane is
@@ -61,41 +59,32 @@ func (m *Model) refreshPreview() {
 	m.previewContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
-// glamourStyleName resolves once, on first use, to "dark" or "light" and is
-// cached for the rest of the process. glamour.WithAutoStyle() re-detects
-// this on every call via termenv.HasDarkBackground(), which queries the
-// terminal (OSC 11) and blocks synchronously waiting for a reply — up to
-// termenv's 5s OSCTimeout. renderDescription runs on the main Update()
-// goroutine every time the selected video changes (i.e. on ordinary up/down
-// navigation), so re-querying per keystroke could freeze all key handling
-// for seconds at a time — confirmed live via an asciinema recording showing
-// a ~13s stall after one such query went unanswered by the terminal in
-// time. The terminal's background doesn't change mid-session, so querying
-// once and reusing the answer is both correct and the actual fix.
-var (
-	styleNameOnce sync.Once
-	styleName     string
-)
-
-func glamourStyleName() string {
-	styleNameOnce.Do(func() {
-		if termenv.HasDarkBackground() {
-			styleName = styles.DarkStyle
-		} else {
-			styleName = styles.LightStyle
-		}
-	})
-	return styleName
-}
-
 // renderDescription renders a video description as Glamour-styled markdown,
 // wrapped to width. Returns "" for an empty description rather than
 // rendering an empty block.
+//
+// Always uses the dark style explicitly (styles.DarkStyle), never
+// glamour.WithAutoStyle(). unspool's own chrome (styles.go) is a fixed dark
+// palette regardless of the terminal's actual background — it never adapts
+// — so there was never a reason to detect the terminal's background at all.
+// WithAutoStyle calls termenv.HasDarkBackground(), which queries the
+// terminal over OSC 11 on the same stdin Bubble Tea's own input reader is
+// concurrently blocked reading from. The two compete for the same bytes:
+// Bubble Tea's reader can consume the terminal's OSC reply before termenv
+// sees it, so termenv hangs waiting (up to its 5s timeout) while Bubble
+// Tea's own reader may now be desynced reading a stray reply as if it were
+// keyboard input. A single cached query (tried first) still executes this
+// race once — that was enough to freeze all key handling for ~13s and, in
+// a later report, apparently wedge the read loop badly enough that only
+// ctrl+c's SIGINT (delivered by the tty driver, not through the byte
+// stream both sides read) could break the program out of it. Never query
+// the terminal at all while Bubble Tea owns stdin — hardcoding the style
+// removes the race entirely rather than narrowing its window.
 func renderDescription(desc string, width int) string {
 	if desc == "" {
 		return ""
 	}
-	r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(glamourStyleName()), glamour.WithWordWrap(width))
+	r, err := glamour.NewTermRenderer(glamour.WithStandardStyle(styles.DarkStyle), glamour.WithWordWrap(width))
 	if err != nil {
 		return styleMeta.Render(desc)
 	}
