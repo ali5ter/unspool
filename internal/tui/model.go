@@ -482,7 +482,7 @@ func clearScreenCmd() tea.Cmd {
 }
 
 func listHeight(totalHeight int) int {
-	h := totalHeight - 3 // header + 2-line status bar (hints/quota, then notice)
+	h := totalHeight - headerHeight - 2 // header (logo-height) + 2-line status bar
 	if h < 0 {
 		return 0
 	}

@@ -38,14 +38,19 @@ func (t tab) prev() tab {
 
 var tabLabels = [...]string{"feed", "queue", "playlists", "liked"}
 
-// renderHeader renders the single top row: "unspool", a " · " separator,
-// then the tab strip — all grouped together on the left, exactly like
-// wwlog's headerView (title + " · " + tabs, left-aligned; wwlog then right-
-// aligns a date range in the remaining space, which unspool has no
-// equivalent of, so that space is just left as background band).
+// headerHeight is renderHeader's row count — asciiLogo is 2 lines. Callers
+// sizing the rest of the layout (listHeight) must match this.
+const headerHeight = 2
+
+// renderHeader renders the header as headerHeight rows: the logo top-left,
+// then the tab strip to its right, vertically centered against the logo's
+// height. band.Width(width) pads every row (including the logo's own,
+// already-styled rows) out to the full terminal width with the same
+// background, so the gap to the right of the tabs reads as one continuous
+// band rather than stopping short where the logo/tabs content ends.
 func renderHeader(active tab, width int) string {
 	band := lipgloss.NewStyle().Background(colorPanel)
-	title := styleHeaderAccent.Render("unspool")
+	logo := renderHeaderLogo()
 
 	var tabs string
 	for i, label := range tabLabels {
@@ -56,21 +61,6 @@ func renderHeader(active tab, width int) string {
 		}
 	}
 
-	left := lipgloss.JoinHorizontal(lipgloss.Center, title, band.Render(" · "), tabs)
-	gap := width - lipgloss.Width(left)
-	if gap < 0 {
-		gap = 0
-	}
-	return band.Width(width).Render(left + band.Render(spaces(gap)))
-}
-
-func spaces(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = ' '
-	}
-	return string(b)
+	left := lipgloss.JoinHorizontal(lipgloss.Center, logo, band.Render("  "), tabs)
+	return band.Width(width).Render(left)
 }
