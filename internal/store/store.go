@@ -124,6 +124,28 @@ func (s *Store) SetVideoLiked(videoID string, liked bool) error {
 	return s.SaveFeedState(f)
 }
 
+// MarkVideosSeen marks every ID in videoIDs as seen in feed_state.json, in
+// a single read-modify-write. Callers batch IDs rather than calling this
+// per video — feed navigation can mark many videos seen in quick
+// succession, and one write per keystroke would both hammer disk and risk
+// concurrent callers racing this file's read-modify-write and losing each
+// other's updates.
+func (s *Store) MarkVideosSeen(videoIDs []string) error {
+	if len(videoIDs) == 0 {
+		return nil
+	}
+	f, err := s.LoadFeedState()
+	if err != nil {
+		return err
+	}
+	for _, id := range videoIDs {
+		state := f.State[id]
+		state.Seen = true
+		f.State[id] = state
+	}
+	return s.SaveFeedState(f)
+}
+
 // LoadQueue reads queue.json.
 func (s *Store) LoadQueue() (QueueFile, error) {
 	f, err := loadJSON[QueueFile](s.path("queue.json"))

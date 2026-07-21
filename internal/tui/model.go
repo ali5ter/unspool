@@ -81,6 +81,10 @@ type Model struct {
 	// playingProcess is the currently-running mpv process, if any — tracked
 	// so the Stop key can kill it even if its window never took focus.
 	playingProcess *os.Process
+
+	// dirtySeen holds video IDs marked seen in-memory (see markSeenIfNeeded)
+	// that haven't been flushed to feed_state.json yet — see flushSeenCmd.
+	dirtySeen map[string]bool
 }
 
 // New builds the initial (pre-sync) model.
@@ -173,11 +177,13 @@ func runSync(cfg *config.Config) tea.Cmd {
 	}
 }
 
-// Update handles a message and refreshes the cached preview afterward, so
-// View() never has to re-run Glamour rendering itself.
+// Update handles a message, marks the Feed tab's current selection seen,
+// and refreshes the cached preview afterward, so View() never has to
+// re-run Glamour rendering or seen-state bookkeeping itself.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.updateInner(msg)
 	nm := next.(Model)
+	nm.markSeenIfNeeded()
 	nm.refreshPreview()
 	return nm, cmd
 }
@@ -215,6 +221,14 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case seenFlushedMsg:
+		// Silent on success — marking videos seen shouldn't announce itself
+		// over whatever the status bar is already showing.
+		if msg.err != nil {
+			m.statusMsg = "mark seen failed: " + msg.err.Error()
+		}
+		return m, nil
+
 	case playlistsLoadedMsg:
 		return m.handlePlaylistsLoaded(msg)
 
@@ -242,6 +256,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// exactly the stuck-video problem the Stop key exists to solve.
 		if key.Matches(msg, m.keys.Quit) {
 			_ = playback.Stop(m.playingProcess)
+			if ids := m.drainDirtySeen(); len(ids) > 0 {
+				_ = m.store.MarkVideosSeen(ids)
+			}
 			return m, tea.Quit
 		}
 		if m.creatingPlaylist {
@@ -297,6 +314,65 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// markSeenIfNeeded marks the Feed tab's currently selected video as seen —
+// PRD §5.1: "a video is 'new' until viewed in the feed". Runs after every
+// Update() call (see the Update wrapper), including ordinary up/down
+// navigation, so it updates the visible row immediately (the ● badge
+// disappears right away) but only queues the change in m.dirtySeen for a
+// later batched write — see flushSeenCmd for why persisting here directly
+// would be a mistake. Scoped to the Feed tab: it's the only list that
+// renders new/seen state.
+func (m *Model) markSeenIfNeeded() {
+	if m.activeTab != tabFeed {
+		return
+	}
+	item, ok := m.feedList.SelectedItem().(feedItem)
+	if !ok || item.State.Seen {
+		return
+	}
+	item.State.Seen = true
+	m.feedList.SetItem(m.feedList.Index(), item)
+	if entry, ok := m.videoIndex[item.Video.VideoID]; ok {
+		entry.State.Seen = true
+		m.videoIndex[item.Video.VideoID] = entry
+	}
+	if m.dirtySeen == nil {
+		m.dirtySeen = map[string]bool{}
+	}
+	m.dirtySeen[item.Video.VideoID] = true
+}
+
+// drainDirtySeen returns the pending seen-state video IDs and clears the
+// set, so a caller can hand them to a write without double-flushing.
+func (m *Model) drainDirtySeen() []string {
+	if len(m.dirtySeen) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(m.dirtySeen))
+	for id := range m.dirtySeen {
+		ids = append(ids, id)
+	}
+	m.dirtySeen = nil
+	return ids
+}
+
+// seenFlushedMsg carries the result of a batched seen-state write back to
+// the model.
+type seenFlushedMsg struct{ err error }
+
+// flushSeenCmd persists a batch of seen video IDs in one write. Marking
+// seen fires on every Feed-tab selection change, so writing feed_state.json
+// per keystroke would either hammer disk during a fast scroll (it's a
+// full-file atomic rewrite, and on a large feed not a cheap one) or, if
+// dispatched as one async Cmd per keystroke, risk concurrent goroutines
+// racing that file's read-modify-write and losing each other's updates.
+// Batching at natural pause points (tab switch, quit) avoids both.
+func flushSeenCmd(st *store.Store, ids []string) tea.Cmd {
+	return func() tea.Msg {
+		return seenFlushedMsg{err: st.MarkVideosSeen(ids)}
+	}
+}
+
 // handleGlobalKey handles keys valid regardless of the active tab. Returns
 // handled=false to fall through to tab-specific handling. Quit is handled
 // earlier, in updateInner, so every overlay/state sees it first.
@@ -319,21 +395,28 @@ func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 	return false, m, nil
 }
 
-// onTabChanged lazily loads data the first time a tab is viewed.
+// onTabChanged lazily loads data the first time a tab is viewed, and
+// flushes any seen-state accumulated while the Feed tab was active — see
+// markSeenIfNeeded and flushSeenCmd.
 func (m *Model) onTabChanged() tea.Cmd {
+	var cmds []tea.Cmd
+	if ids := m.drainDirtySeen(); len(ids) > 0 {
+		cmds = append(cmds, flushSeenCmd(m.store, ids))
+	}
+
 	switch m.activeTab {
 	case tabPlaylists:
 		if !m.playlistsLoaded {
 			m.statusMsg = "loading playlists…"
-			return loadPlaylistsCmd(m.cfg)
+			cmds = append(cmds, loadPlaylistsCmd(m.cfg))
 		}
 	case tabLiked:
 		if !m.likedLoaded {
 			m.statusMsg = "loading liked videos…"
-			return loadLikedCmd(m.cfg)
+			cmds = append(cmds, loadLikedCmd(m.cfg))
 		}
 	}
-	return nil
+	return tea.Batch(cmds...)
 }
 
 // listWidthFor returns the list pane's width given the total terminal
