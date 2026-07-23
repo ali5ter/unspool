@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/ali5ter/unspool/internal/feed"
 	"github.com/ali5ter/unspool/internal/queue"
@@ -63,39 +64,45 @@ func (m Model) handleQueueKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handlePlaylistsKey routes by focusedColumn instead of a drill-down mode:
+// column 0 (the playlists list itself) gets playlist-level actions
+// (new/delete); columns 1 and 2 (that playlist's videos, and its detail
+// pane) both act on playlistItemsList's selection, since the detail column
+// only ever mirrors whatever's highlighted in column 1 — only column 1
+// forwards keys to a list.Update, since column 2 is read-only (its Up/Down
+// is intercepted earlier, in handleGlobalKey, to scroll instead).
 func (m Model) handlePlaylistsKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.viewingPlaylist {
+	if m.focusedColumn == 0 {
 		switch {
-		case key.Matches(msg, m.keys.Play):
-			return m, m.playSelected(false)
-		case key.Matches(msg, m.keys.AudioOnly):
-			return m, m.playSelected(true)
+		case key.Matches(msg, m.keys.NewList):
+			m.creatingPlaylist = true
+			m.newPlaylistInput.SetValue("")
+			return m, tea.Batch(clearScreenCmd(), m.newPlaylistInput.Focus())
 		case key.Matches(msg, m.keys.Remove):
-			return m.removeSelectedFromOpenPlaylist()
-		case key.Matches(msg, m.keys.AddToList):
-			return m.openMovePickerForSelected()
-		case key.Matches(msg, m.keys.Back):
-			m.viewingPlaylist = false
-			return m, nil
+			return m.confirmDeleteSelectedPlaylist()
 		}
 		var cmd tea.Cmd
-		m.playlistItemsList, cmd = m.playlistItemsList.Update(msg)
-		return m, cmd
+		m.playlistsList, cmd = m.playlistsList.Update(msg)
+		next, loadCmd := m.syncOpenPlaylistToSelection()
+		return next, tea.Batch(cmd, loadCmd)
 	}
 
 	switch {
 	case key.Matches(msg, m.keys.Play):
-		return m.openSelectedPlaylist()
-	case key.Matches(msg, m.keys.NewList):
-		m.creatingPlaylist = true
-		m.newPlaylistInput.SetValue("")
-		return m, tea.Batch(clearScreenCmd(), m.newPlaylistInput.Focus())
+		return m, m.playSelected(false)
+	case key.Matches(msg, m.keys.AudioOnly):
+		return m, m.playSelected(true)
 	case key.Matches(msg, m.keys.Remove):
-		return m.confirmDeleteSelectedPlaylist()
+		return m.removeSelectedFromOpenPlaylist()
+	case key.Matches(msg, m.keys.AddToList):
+		return m.openMovePickerForSelected()
 	}
-	var cmd tea.Cmd
-	m.playlistsList, cmd = m.playlistsList.Update(msg)
-	return m, cmd
+	if m.focusedColumn == 1 {
+		var cmd tea.Cmd
+		m.playlistItemsList, cmd = m.playlistItemsList.Update(msg)
+		return m, cmd
+	}
+	return m, nil
 }
 
 func (m Model) handleLikedKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -126,7 +133,7 @@ func (m Model) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tabQueue:
 		m.queueList, cmd = m.queueList.Update(msg)
 	case tabPlaylists:
-		if m.viewingPlaylist {
+		if m.focusedColumn == 1 {
 			m.playlistItemsList, cmd = m.playlistItemsList.Update(msg)
 		} else {
 			m.playlistsList, cmd = m.playlistsList.Update(msg)
@@ -137,21 +144,44 @@ func (m Model) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// viewActiveTab renders the current single-list tabs (Feed/Queue/Liked).
+// Playlists has its own dedicated multi-column renderer — see
+// viewPlaylistsColumns — since it isn't a single list.
 func (m Model) viewActiveTab() string {
 	switch m.activeTab {
 	case tabFeed:
 		return m.feedList.View()
 	case tabQueue:
 		return m.queueList.View()
-	case tabPlaylists:
-		if m.viewingPlaylist {
-			return m.playlistItemsList.View()
-		}
-		return m.playlistsList.View()
 	case tabLiked:
 		return m.likedList.View()
 	}
 	return ""
+}
+
+// viewPlaylistsColumns renders the Playlists tab's up-to-three columns
+// (playlists, that playlist's videos, selected video detail), each in a
+// focus-aware box — see columnBox and playlistsColumnWidths.
+func (m Model) viewPlaylistsColumns(h int) string {
+	widths := playlistsColumnWidths(m.width)
+	cols := []string{columnBox(m.playlistsList.View(), widths[0], h, m.focusedColumn == 0)}
+	if len(widths) > 1 {
+		cols = append(cols, columnBox(m.playlistItemsList.View(), widths[1], h, m.focusedColumn == 1))
+	}
+	if len(widths) > 2 {
+		detail := m.renderDetailContent(columnContentHeight(h))
+		cols = append(cols, columnBox(detail, widths[2], h, m.focusedColumn == 2))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+}
+
+// playlistsFooterHints returns the Playlists tab's key legend for whichever
+// column currently has focus.
+func (m Model) playlistsFooterHints() []hint {
+	if m.focusedColumn == 0 {
+		return []hint{{"n", "new"}, {"d", "delete"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
+	}
+	return []hint{{"↵", "play"}, {"A", "audio"}, {"d", "remove"}, {"p", "move"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 }
 
 // refreshQueueList rebuilds the Queue tab's rows from queue.json, resolving
@@ -225,16 +255,26 @@ func (m Model) muteSelectedChannel() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) openSelectedPlaylist() (tea.Model, tea.Cmd) {
+// syncOpenPlaylistToSelection loads the currently-highlighted playlist's
+// videos into the middle column if it isn't already the one shown there —
+// called whenever the highlighted row in playlistsList could have changed
+// (initial load, navigation, deletion), so the items/detail columns always
+// reflect whatever's highlighted without a separate "open" step (there's
+// no drill-down anymore: all three Playlists columns are visible at once).
+// Deliberately fires on every highlight change rather than debouncing:
+// each fetch is a single cheap videos.list batch call (1 quota unit), and
+// the response is staleness-guarded against the selection having moved on
+// again before it returns — see handlePlaylistItemsLoaded.
+func (m Model) syncOpenPlaylistToSelection() (Model, tea.Cmd) {
 	sel, ok := m.playlistsList.SelectedItem().(playlistRow)
-	if !ok {
+	if !ok || sel.playlist.PlaylistID == m.openPlaylistID {
 		return m, nil
 	}
 	m.openPlaylistID = sel.playlist.PlaylistID
 	m.openPlaylistTitle = sel.playlist.Title
-	m.playlistItemsList.Title = "▸ " + sel.playlist.Title
 	m.statusMsg = "loading playlist…"
-	return m, openPlaylistCmd(m.cfg, sel.playlist.PlaylistID)
+	m.busy = true
+	return m, tea.Batch(openPlaylistCmd(m.cfg, sel.playlist.PlaylistID), m.spinner.Tick)
 }
 
 // confirmDeleteSelectedPlaylist opens a confirm overlay for deleting the
@@ -272,7 +312,15 @@ func (m Model) updateDeletingPlaylist(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 		m.playlistsList.SetItems(kept)
 		m.pickerList.SetItems(kept)
 
-		return m, tea.Batch(clearScreenCmd(), deletePlaylistCmd(m.cfg, id, title))
+		if id == m.openPlaylistID {
+			// The deleted playlist was the one shown in the middle column
+			// — clear openPlaylistID so syncOpenPlaylistToSelection below
+			// doesn't no-op on its "already showing this one" guard and
+			// actually reloads for whatever's now highlighted.
+			m.openPlaylistID = ""
+		}
+		next, loadCmd := m.syncOpenPlaylistToSelection()
+		return next, tea.Batch(clearScreenCmd(), deletePlaylistCmd(m.cfg, id, title), loadCmd)
 	}
 	return m, nil
 }
@@ -313,7 +361,8 @@ func (m Model) openPickerForSelected() (Model, tea.Cmd) {
 	if !m.playlistsLoaded {
 		m.pickerPending = true
 		m.statusMsg = "loading playlists…"
-		return m, loadPlaylistsCmd(m.cfg)
+		m.busy = true
+		return m, tea.Batch(loadPlaylistsCmd(m.cfg), m.spinner.Tick)
 	}
 	m.pickerActive = true
 	m.pickerList.SetItems(m.playlistsList.Items())
@@ -336,7 +385,8 @@ func (m Model) openMovePickerForSelected() (Model, tea.Cmd) {
 	if !m.playlistsLoaded {
 		m.pickerPending = true
 		m.statusMsg = "loading playlists…"
-		return m, loadPlaylistsCmd(m.cfg)
+		m.busy = true
+		return m, tea.Batch(loadPlaylistsCmd(m.cfg), m.spinner.Tick)
 	}
 	m.pickerActive = true
 	m.pickerList.SetItems(excludePlaylist(m.playlistsList.Items(), m.openPlaylistID))

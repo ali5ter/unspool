@@ -20,9 +20,14 @@ func previewWidth(totalWidth int) int {
 }
 
 // refreshPreview regenerates the cached preview content when the selected
-// item has changed. Glamour rendering isn't cheap enough to redo on every
-// View() call (which fires on every message, including spinner ticks), so
-// the result is cached and only recomputed on an actual selection change.
+// item, or the detail column's width, has changed. Glamour rendering isn't
+// cheap enough to redo on every View() call (which fires on every message,
+// including spinner ticks), so the result is cached and only recomputed on
+// an actual change. previewWidthUsed is keyed on the detail column's own
+// outer width, not m.width directly — Feed/Queue/Liked's detail column and
+// the Playlists tab's third column are sized differently at the same
+// terminal width, so comparing against raw m.width could wrongly reuse
+// content wrapped for a different width after switching tabs.
 func (m *Model) refreshPreview() {
 	video, channel, ok := m.selectedVideo()
 	if !ok {
@@ -30,14 +35,23 @@ func (m *Model) refreshPreview() {
 		m.previewContent = styleMeta.Render("Nothing selected.")
 		return
 	}
-	if video.VideoID == m.previewVideoID && m.previewWidthUsed == m.width {
+	outerW := m.detailColumnOuterWidth()
+	if outerW == 0 {
+		// No detail column visible at this width/tab — nothing to render,
+		// and no point paying for a Glamour pass no one will see.
+		m.previewVideoID = video.VideoID
+		m.previewWidthUsed = outerW
+		m.previewContent = ""
+		return
+	}
+	if video.VideoID == m.previewVideoID && m.previewWidthUsed == outerW {
 		return
 	}
 	m.previewVideoID = video.VideoID
-	m.previewWidthUsed = m.width
+	m.previewWidthUsed = outerW
 	m.previewScroll = 0
 
-	w := previewWidth(m.width) - 4 // account for padding
+	w := columnContentWidth(outerW)
 	if w < 20 {
 		w = 20
 	}
@@ -96,32 +110,26 @@ func renderDescription(desc string, width int) string {
 	return out
 }
 
-// renderPreviewPane wraps the cached preview content in the pane's fixed
-// width and padding, windowed to height starting at m.previewScroll (see
-// keys.ScrollUp/ScrollDown). lipgloss's Height() only pads short content up
-// to the minimum — it doesn't truncate long content — so a long description
-// (which is unbounded, unlike everything else in the preview) could
-// otherwise grow the pane past its budget and push the status bar (and
-// everything below it) off the bottom of the terminal entirely. windowLines
-// handles that at the content level; MaxHeight is a hard backstop in case
-// the styled/padded/bordered render still ends up taller than the raw line
-// count suggests.
+// renderDetailContent windows the cached preview content to height
+// starting at m.previewScroll (see keys.Up/Down, intercepted by
+// handleGlobalKey while the detail column has focus) — the box itself
+// (width, border, focus color) is applied by the caller via columnBox,
+// the same as every other column, not here.
+//
+// A long description (which is unbounded, unlike everything else in the
+// preview) could otherwise grow past the column's height budget and push
+// the status bar (and everything below it) off the bottom of the
+// terminal — windowLines truncates at the content level, and columnBox's
+// own MaxHeight is a hard backstop in case the rendered result still ends
+// up taller than the raw line count suggests.
 //
 // The clamp here is local to this render, not written back to
 // m.previewScroll — View() must not mutate model state. handleGlobalKey
 // clamps the stored value too when adjusting it, so this is a defensive
 // second pass (e.g. covering a resize that shrank height since the last
 // scroll keypress), not the only place clamping happens.
-func (m Model) renderPreviewPane(height int) string {
-	content := windowLines(m.previewContent, m.previewScroll, height)
-	return lipgloss.NewStyle().
-		Width(previewWidth(m.width)).
-		Height(height).
-		MaxHeight(height).
-		Padding(0, 1, 0, 2).
-		Border(lipgloss.NormalBorder(), false, false, false, true).
-		BorderForeground(colorLine).
-		Render(content)
+func (m Model) renderDetailContent(height int) string {
+	return windowLines(m.previewContent, m.previewScroll, height)
 }
 
 // windowLines returns at most n lines of s starting at offset (clamped into

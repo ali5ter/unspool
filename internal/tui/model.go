@@ -6,6 +6,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"strings"
 	"time"
@@ -48,25 +49,52 @@ type Model struct {
 	quotaBudget int
 	statusMsg   string
 
+	// busy is true only while a real async operation is in flight that a
+	// spinner.Tick chain was explicitly started for (sync, loading
+	// playlists/liked/a playlist) — see every "…" statusMsg assignment
+	// paired with m.spinner.Tick. Deliberately NOT true for "playing…":
+	// mpv can run for a video's entire length (hours), and it's mpv doing
+	// the work, not unspool, so there's nothing actively "busy" to animate.
+	// Drives both whether the spinner keeps ticking (below) and whether
+	// statusLine shows the animated glyph+sweep vs. a flat tint.
+	busy bool
+
+	// pulseTick advances once per spinner.TickMsg while busy — drives the
+	// spinner glyph and the notice-text color sweep in statusLine, so a
+	// busy state reads as alive rather than a static amber label.
+	pulseTick int
+
 	width, height int
+
+	// focusedColumn indexes which of the active tab's columns currently
+	// has keyboard focus — Left/Right (keys.FocusPrev/FocusNext) moves it,
+	// Up/Down then acts on whichever column it points at (navigate a list,
+	// or scroll the detail column — see focusedColumnKind). Feed/Queue/
+	// Liked have up to 2 columns (list, detail); Playlists has up to 3
+	// (playlists, its videos, detail). Reset to 0 on every tab switch.
+	focusedColumn int
 
 	// videoIndex resolves a video ID to its last-known feed metadata, used
 	// to render Queue rows (which only persist video IDs).
 	videoIndex map[string]feed.Item
 
-	// Playlists tab drill-down state.
-	viewingPlaylist   bool
+	// openPlaylistID/openPlaylistTitle track which playlist the middle
+	// column (playlistItemsList) currently shows — kept in sync with
+	// whatever's highlighted in playlistsList by syncOpenPlaylistToSelection,
+	// not by an explicit "open" keypress (there's no drill-down: all three
+	// Playlists columns are visible at once).
 	openPlaylistID    string
 	openPlaylistTitle string
 	playlistsLoaded   bool
 
 	// "add to playlist" picker overlay. pickerMoveItemID/pickerMoveFromID
-	// are set only when the picker was opened from inside a playlist's own
-	// item view ('p' while viewingPlaylist) — see openMovePickerForSelected
-	// — turning "add to" into "move to": confirming also removes the item
-	// from the source playlist, and the source itself is excluded from the
-	// picker's choices (moving a video to the playlist it's already in is
-	// a confusing no-op, not worth supporting).
+	// are set only when the picker was opened from the Playlists tab's
+	// items/detail column ('p' while focusedColumn is 1 or 2) — see
+	// openMovePickerForSelected — turning "add to" into "move to":
+	// confirming also removes the item from the source playlist, and the
+	// source itself is excluded from the picker's choices (moving a video
+	// to the playlist it's already in is a confusing no-op, not worth
+	// supporting).
 	pickerActive     bool
 	pickerVideo      store.Video
 	pickerChannel    string
@@ -92,7 +120,7 @@ type Model struct {
 	previewVideoID   string
 	previewContent   string
 	previewWidthUsed int
-	previewScroll    int // shift+up/down — see keys.ScrollUp/ScrollDown
+	previewScroll    int // up/down while the detail column is focused — see handleGlobalKey
 
 	// playingProcess is the currently-running mpv process, if any — tracked
 	// so the Stop key can kill it even if its window never took focus.
@@ -134,28 +162,31 @@ func New(cfg *config.Config) Model {
 		return l
 	}
 
-	sp := spinner.New()
+	// MiniDot is the classic Braille-dot spinner (⠋⠙⠹⠸…) — spinner.New()'s
+	// own default is Line ("|/-\"), which reads as a plain ASCII spinner,
+	// not the Braille one this is meant to evoke.
+	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
 	ti := textinput.New()
 	ti.Placeholder = "playlist title"
 
-	playlistItemsList := newListModel()
-	playlistItemsList.SetShowTitle(true)
-	playlistItemsList.Styles.Title = styleDialogTitle.Background(colorBG)
-
 	return Model{
-		cfg:               cfg,
-		store:             store.New(cfg.StoreDir),
-		keys:              newKeyMap(),
-		feedList:          newListModel(),
-		queueList:         newListModel(),
-		playlistsList:     newListModel(),
-		playlistItemsList: playlistItemsList,
+		cfg:           cfg,
+		store:         store.New(cfg.StoreDir),
+		keys:          newKeyMap(),
+		feedList:      newListModel(),
+		queueList:     newListModel(),
+		playlistsList: newListModel(),
+		// No title (matches every other list): column 0 already shows
+		// which playlist is highlighted, so repeating its name as a
+		// header here would just be the same information twice.
+		playlistItemsList: newListModel(),
 		likedList:         newListModel(),
 		pickerList:        newListModel(),
 		spinner:           sp,
 		syncing:           true,
+		busy:              true,
 		quotaBudget:       api.DailyQuota,
 		statusMsg:         "syncing…",
 		videoIndex:        map[string]feed.Item{},
@@ -213,24 +244,38 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		h := listHeight(msg.Height)
-		lw := listWidthFor(msg.Width)
-		m.feedList.SetSize(lw, h)
-		m.queueList.SetSize(lw, h)
-		// playlistsList (the top-level list of playlists, not a playlist's
-		// videos) never shares the row with a preview pane — there's no
-		// video to preview there — so it always gets the full width rather
-		// than losing a third of it to an empty "Nothing selected." pane.
-		m.playlistsList.SetSize(msg.Width, h)
-		m.playlistItemsList.SetSize(lw, h)
-		m.likedList.SetSize(lw, h)
+		ch := columnContentHeight(listHeight(msg.Height))
+
+		lw := columnContentWidth(listWidthFor(msg.Width))
+		m.feedList.SetSize(lw, ch)
+		m.queueList.SetSize(lw, ch)
+		m.likedList.SetSize(lw, ch)
+
+		// Playlists' three columns split the width differently from
+		// Feed/Queue/Liked's list+detail split — see playlistsColumnWidths.
+		plWidths := playlistsColumnWidths(msg.Width)
+		m.playlistsList.SetSize(columnContentWidth(plWidths[0]), ch)
+		if len(plWidths) > 1 {
+			m.playlistItemsList.SetSize(columnContentWidth(plWidths[1]), ch)
+		} else {
+			m.playlistItemsList.SetSize(columnContentWidth(plWidths[0]), ch)
+		}
+
 		m.pickerList.SetSize(modalListSize(msg.Width, msg.Height))
+
+		if n := m.activeColumnCount(); m.focusedColumn >= n {
+			m.focusedColumn = n - 1
+		}
+		if m.focusedColumn < 0 {
+			m.focusedColumn = 0
+		}
 		return m, nil
 
 	case spinner.TickMsg:
-		if m.syncing {
+		if m.busy {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
+			m.pulseTick++
 			return m, cmd
 		}
 		return m, nil
@@ -270,6 +315,11 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleLikedLoaded(msg)
 
 	case playbackStartedMsg:
+		// m.busy stays false here, deliberately: unlike sync/loading,
+		// "playing…" can sit for a video's entire runtime (hours), and mpv
+		// — not unspool — is doing the work, so there's nothing actively
+		// "busy" to animate. renderNotice gives it a flat amber tint
+		// instead of the spinner+sweep treatment.
 		m.playingProcess = msg.handle.Process()
 		m.statusMsg = "playing…"
 		return m, waitForExitCmd(msg.handle)
@@ -334,6 +384,7 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.syncing = false
+	m.busy = false
 	m.everSynced = true
 	if msg.err != nil {
 		m.statusMsg = "sync failed: " + msg.err.Error()
@@ -430,32 +481,55 @@ func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 		return true, next.(Model), cmd
 	case key.Matches(msg, m.keys.Sync):
 		m.syncing = true
+		m.busy = true
 		m.statusMsg = "syncing…"
 		return true, m, tea.Batch(m.spinner.Tick, runSync(m.cfg))
 	case key.Matches(msg, m.keys.NextTab):
 		m.activeTab = m.activeTab.next()
+		m.focusedColumn = 0
 		return true, m, m.onTabChanged()
 	case key.Matches(msg, m.keys.PrevTab):
 		m.activeTab = m.activeTab.prev()
+		m.focusedColumn = 0
 		return true, m, m.onTabChanged()
-	case key.Matches(msg, m.keys.ScrollUp):
-		m.previewScroll -= previewScrollStep
-		if m.previewScroll < 0 {
-			m.previewScroll = 0
+	case key.Matches(msg, m.keys.FocusNext):
+		if n := m.activeColumnCount(); m.focusedColumn < n-1 {
+			m.focusedColumn++
 		}
 		return true, m, nil
-	case key.Matches(msg, m.keys.ScrollDown):
-		m.previewScroll += previewScrollStep
-		if max := previewScrollMax(m.previewContent, listHeight(m.height)); m.previewScroll > max {
-			m.previewScroll = max
+	case key.Matches(msg, m.keys.FocusPrev):
+		if m.focusedColumn > 0 {
+			m.focusedColumn--
 		}
 		return true, m, nil
+	case key.Matches(msg, m.keys.Up):
+		// Only intercepted while the detail column has focus — otherwise
+		// falls through (handled=false) so the tab handler forwards it to
+		// whichever list currently has focus, same as before Left/Right
+		// column focus existed.
+		if m.focusedColumnKind() == columnDetail {
+			m.previewScroll -= previewScrollStep
+			if m.previewScroll < 0 {
+				m.previewScroll = 0
+			}
+			return true, m, nil
+		}
+	case key.Matches(msg, m.keys.Down):
+		if m.focusedColumnKind() == columnDetail {
+			m.previewScroll += previewScrollStep
+			maxScroll := previewScrollMax(m.previewContent, columnContentHeight(listHeight(m.height)))
+			if m.previewScroll > maxScroll {
+				m.previewScroll = maxScroll
+			}
+			return true, m, nil
+		}
 	}
 	return false, m, nil
 }
 
-// previewScrollStep is how many lines shift+up/down moves the preview pane
-// per press — small enough to feel like scrolling, not paging.
+// previewScrollStep is how many lines up/down moves the detail column's
+// content per press while it's focused — small enough to feel like
+// scrolling, not paging.
 const previewScrollStep = 3
 
 // onTabChanged lazily loads data the first time a tab is viewed, and
@@ -469,14 +543,25 @@ func (m *Model) onTabChanged() tea.Cmd {
 
 	switch m.activeTab {
 	case tabPlaylists:
-		if !m.playlistsLoaded {
+		switch {
+		case !m.playlistsLoaded:
 			m.statusMsg = "loading playlists…"
-			cmds = append(cmds, loadPlaylistsCmd(m.cfg))
+			m.busy = true
+			cmds = append(cmds, loadPlaylistsCmd(m.cfg), m.spinner.Tick)
+		case m.openPlaylistID == "":
+			// Playlists were loaded already (e.g. via the add-to-playlist
+			// picker from another tab) but the middle column was never
+			// populated — sync it now rather than showing an empty column
+			// until the user happens to move the playlists selection.
+			var loadCmd tea.Cmd
+			*m, loadCmd = m.syncOpenPlaylistToSelection()
+			cmds = append(cmds, loadCmd)
 		}
 	case tabLiked:
 		if !m.likedLoaded {
 			m.statusMsg = "loading liked videos…"
-			cmds = append(cmds, loadLikedCmd(m.cfg))
+			m.busy = true
+			cmds = append(cmds, loadLikedCmd(m.cfg), m.spinner.Tick)
 		}
 	}
 	return tea.Batch(cmds...)
@@ -512,8 +597,10 @@ func clearScreenCmd() tea.Cmd {
 }
 
 // footerHeight is the footer's total row count: statusLine's 2 content
-// rows plus the 1-row rule above them (styleStatusBar's top border).
-const footerHeight = 3
+// rows. Previously +1 for a rule above them (styleStatusBar's top
+// border) — removed now that every column above renders in its own
+// bordered box, whose bottom edge already marks this boundary.
+const footerHeight = 2
 
 func listHeight(totalHeight int) int {
 	h := totalHeight - headerHeight - footerHeight
@@ -556,11 +643,7 @@ func (m Model) View() tea.View {
 	default:
 		header := renderHeader(m.activeTab, m.width)
 		status := styleStatusBar.Width(m.width).Render(m.statusLine())
-		body := m.viewActiveTab()
-		if m.width >= previewMinWidth && m.previewApplicable() {
-			body = lipgloss.JoinHorizontal(lipgloss.Top, body, m.renderPreviewPane(listHeight(m.height)))
-		}
-		view = lipgloss.JoinVertical(lipgloss.Left, header, body, status)
+		view = lipgloss.JoinVertical(lipgloss.Left, header, m.viewBody(), status)
 	}
 
 	v := tea.NewView(view)
@@ -568,11 +651,31 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// viewBody renders the active tab's column(s), each wrapped in a
+// focus-aware box (see columnBox) — Playlists has up to three (playlists /
+// its videos / video detail), every other tab has up to two (list /
+// detail).
+func (m Model) viewBody() string {
+	h := listHeight(m.height)
+	if m.activeTab == tabPlaylists {
+		return m.viewPlaylistsColumns(h)
+	}
+
+	cols := []string{columnBox(m.viewActiveTab(), listWidthFor(m.width), h, m.focusedColumn == 0)}
+	if m.activeColumnCount() == 2 {
+		detail := m.renderDetailContent(columnContentHeight(h))
+		cols = append(cols, columnBox(detail, previewWidth(m.width), h, m.focusedColumn == 1))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Top, cols...)
+}
+
 // viewSplash renders the startup screen shown only during the very first
 // sync — the gradient logo above a dialog with a spinner, mirroring wwlog's
 // splash/loading screens.
 func (m Model) viewSplash() string {
-	dialog := renderDialog("unspool", styleSplashSub.Render(m.spinner.View()+"  Syncing your subscriptions…"), "ctrl+c to quit")
+	text := m.spinnerGlyph() + "  Syncing your subscriptions…"
+	notice := sweepText(text, m.pulseTick, colorPanel)
+	dialog := renderDialog("unspool", notice, "ctrl+c to quit")
 	content := lipgloss.JoinVertical(lipgloss.Center, renderLogo(), "", dialog)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
@@ -590,18 +693,15 @@ func (m Model) footerHints() []hint {
 	switch {
 	case m.activeTab == tabQueue:
 		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
-	case m.activeTab == tabPlaylists && m.viewingPlaylist:
-		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"p", "move"}, {"esc", "back"}, {"tab", "switch"}, {"q", "quit"}}
-	case m.activeTab == tabPlaylists && !m.viewingPlaylist:
-		hints = []hint{{"↵", "open"}, {"n", "new"}, {"d", "delete"}, {"tab", "switch"}, {"q", "quit"}}
+	case m.activeTab == tabPlaylists:
+		hints = m.playlistsFooterHints()
 	default:
 		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"m", "mute"}, {"l", "like"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	}
-	// Only relevant where the preview pane is actually visible — no point
-	// hinting a scroll key over an empty pane (or one that isn't shown at
-	// all on a narrow terminal).
-	if m.previewApplicable() && m.width >= previewMinWidth {
-		hints = append(hints, hint{"⇧↑↓", "scroll"})
+	// Only relevant where there's more than one column to move focus
+	// between — no point hinting it over a single-column narrow layout.
+	if m.activeColumnCount() > 1 {
+		hints = append(hints, hint{"←→", "focus"})
 	}
 	if m.playingProcess != nil {
 		hints = append([]hint{{"S", "stop"}}, hints...)
@@ -637,9 +737,47 @@ func (m Model) statusLine() string {
 	quota := labelStyle.Render(fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget))
 	line1 := left + band.Render("   ") + quota
 
-	line2 := statusNoticeStyle(m.statusMsg).Render(m.statusMsg)
+	return line1 + "\n" + m.renderNotice()
+}
 
-	return line1 + "\n" + line2
+// renderNotice renders the status notice (statusLine's second row), tinted
+// by what kind of message it is: failures consistently contain "failed";
+// genuinely busy states (m.busy — sync, loading playlists/liked/a
+// playlist) get the animated spinner glyph plus a color sweep travelling
+// across the text (see sweepText); everything else, including "playing…"
+// (which can sit for a video's entire runtime with mpv, not unspool, doing
+// the work — nothing to animate), gets a flat tint.
+func (m Model) renderNotice() string {
+	padCell := lipgloss.NewStyle().Background(colorLine).Render(" ")
+	flat := func(fg color.Color) string {
+		return lipgloss.NewStyle().Background(colorLine).Foreground(fg).Padding(0, 1).Render(m.statusMsg)
+	}
+	switch {
+	case strings.Contains(m.statusMsg, "failed"):
+		return flat(colorAccent)
+	case m.busy && strings.HasSuffix(m.statusMsg, "…"):
+		text := m.spinnerGlyph() + " " + m.statusMsg
+		return padCell + sweepText(text, m.pulseTick, colorLine) + padCell
+	case strings.HasSuffix(m.statusMsg, "…"):
+		return flat(colorAmber)
+	default:
+		return flat(colorTeal)
+	}
+}
+
+// spinnerGlyph returns the spinner's current frame with no styling of its
+// own. It's deliberately raw text, not m.spinner.View() — that method
+// renders through m.spinner.Style, which emits its own ANSI reset at the
+// end. Concatenating that into a larger string and then wrapping the whole
+// thing in another lipgloss Style.Render() breaks: the inner reset fires
+// partway through, so everything after the glyph (the notice text) loses
+// the outer style entirely and falls back to the terminal's default color.
+// Composing the raw glyph into the notice first and styling the combined
+// string in one Render call (see statusLine, viewSplash) avoids this.
+func (m Model) spinnerGlyph() string {
+	sp := m.spinner
+	sp.Style = lipgloss.NewStyle()
+	return sp.View()
 }
 
 // firstLine collapses err to its first non-empty line, marking with "…" if
@@ -655,22 +793,6 @@ func firstLine(s string) string {
 		return first + " …"
 	}
 	return first
-}
-
-// statusNoticeStyle tints the status notice by what kind of message it is —
-// in-progress messages consistently end in "…" already (see the statusMsg
-// assignments throughout this package), and failures consistently contain
-// "failed", so no separate tagging mechanism is needed to classify them.
-func statusNoticeStyle(msg string) lipgloss.Style {
-	style := lipgloss.NewStyle().Background(colorLine).Padding(0, 1).Bold(true)
-	switch {
-	case strings.Contains(msg, "failed"):
-		return style.Foreground(colorAccent)
-	case strings.HasSuffix(msg, "…"):
-		return style.Foreground(colorAmber)
-	default:
-		return style.Foreground(colorTeal)
-	}
 }
 
 func (m Model) overlayModal(dialog string) string {
@@ -745,14 +867,6 @@ func (m Model) stopPlayback() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// previewApplicable reports whether the current tab/state has a video to
-// preview at all. False only for the top-level Playlists list (browsing
-// playlists themselves, not a playlist's videos) — see the WindowSizeMsg
-// case above, where playlistsList is sized full-width to match.
-func (m Model) previewApplicable() bool {
-	return !(m.activeTab == tabPlaylists && !m.viewingPlaylist)
-}
-
 // selectedVideo returns the video (and its channel title, where known)
 // selected in the currently active tab's list.
 func (m Model) selectedVideo() (store.Video, string, bool) {
@@ -770,13 +884,11 @@ func (m Model) selectedVideo() (store.Video, string, bool) {
 			return sel.video, sel.video.ChannelTitle, true
 		}
 	case tabPlaylists:
-		if m.viewingPlaylist {
-			if sel, ok := m.playlistItemsList.SelectedItem().(playlistItemRow); ok {
-				video := sel.video
-				video.VideoID = sel.ref.VideoID
-				video.Title = sel.ref.Title
-				return video, sel.channel, true
-			}
+		if sel, ok := m.playlistItemsList.SelectedItem().(playlistItemRow); ok {
+			video := sel.video
+			video.VideoID = sel.ref.VideoID
+			video.Title = sel.ref.Title
+			return video, sel.channel, true
 		}
 	}
 	return store.Video{}, "", false

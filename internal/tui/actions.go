@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +14,18 @@ import (
 	"github.com/ali5ter/unspool/internal/queue"
 	"github.com/ali5ter/unspool/internal/store"
 )
+
+// sortPlaylistRows sorts playlistRow items alphabetically by title
+// (case-insensitive), in place. A real sort/search mode is future work
+// (M3+) — this just gives a stable, predictable default order instead of
+// whatever playlists.list happens to return.
+func sortPlaylistRows(items []list.Item) {
+	sort.SliceStable(items, func(i, j int) bool {
+		a, _ := items[i].(playlistRow)
+		b, _ := items[j].(playlistRow)
+		return strings.ToLower(a.playlist.Title) < strings.ToLower(b.playlist.Title)
+	})
+}
 
 // mirrorQueueCmd reconciles the Queue mirror in the background. It returns
 // no message on success (silent) so it doesn't stomp the "added/removed"
@@ -91,6 +105,7 @@ func loadPlaylistsCmd(cfg *config.Config) tea.Cmd {
 
 func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd) {
 	m.playlistsLoaded = true
+	m.busy = false
 	if msg.err != nil {
 		m.statusMsg = "load playlists failed: " + msg.err.Error()
 		m.pickerPending = false
@@ -112,6 +127,7 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 		}
 		items = append(items, playlistRow{playlist: p})
 	}
+	sortPlaylistRows(items)
 	m.playlistsList.SetItems(items)
 	if m.pickerMoveFromID != "" {
 		m.pickerList.SetItems(excludePlaylist(items, m.pickerMoveFromID))
@@ -120,19 +136,28 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 	}
 	m.statusMsg = "loaded playlists"
 
+	var cmds []tea.Cmd
+	if m.activeTab == tabPlaylists {
+		// Show the first (now alphabetically first) playlist's videos
+		// immediately — there's no drill-down step to wait for anymore.
+		var loadCmd tea.Cmd
+		m, loadCmd = m.syncOpenPlaylistToSelection()
+		cmds = append(cmds, loadCmd)
+	}
 	if m.pickerPending {
 		m.pickerPending = false
 		m.pickerActive = true
-		return m, clearScreenCmd()
+		cmds = append(cmds, clearScreenCmd())
 	}
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
 // playlistItemsLoadedMsg carries the result of openPlaylistCmd.
 type playlistItemsLoadedMsg struct {
-	refs    []api.PlaylistItemRef
-	details map[string]api.VideoDetail
-	err     error
+	playlistID string
+	refs       []api.PlaylistItemRef
+	details    map[string]api.VideoDetail
+	err        error
 }
 
 // openPlaylistCmd lists a playlist's items and, since a playlist can hold
@@ -146,11 +171,11 @@ func openPlaylistCmd(cfg *config.Config, playlistID string) tea.Cmd {
 		ctx := context.Background()
 		client, err := newClient(ctx, cfg)
 		if err != nil {
-			return playlistItemsLoadedMsg{err: err}
+			return playlistItemsLoadedMsg{playlistID: playlistID, err: err}
 		}
 		refs, err := client.ListPlaylistItemRefs(ctx, playlistID)
 		if err != nil {
-			return playlistItemsLoadedMsg{err: err}
+			return playlistItemsLoadedMsg{playlistID: playlistID, err: err}
 		}
 		ids := make([]string, len(refs))
 		for i, ref := range refs {
@@ -162,11 +187,20 @@ func openPlaylistCmd(cfg *config.Config, playlistID string) tea.Cmd {
 			// the whole playlist view over a metadata lookup.
 			details = nil
 		}
-		return playlistItemsLoadedMsg{refs: refs, details: details}
+		return playlistItemsLoadedMsg{playlistID: playlistID, refs: refs, details: details}
 	}
 }
 
+// handlePlaylistItemsLoaded applies a fetch's result — unless the
+// highlighted playlist has since moved on to a different one (possibly
+// through several more) before this response arrived, in which case it's
+// stale and discarded: whatever's shown or in flight now is current, not
+// this. Same staleness-guard pattern as playbackExitedMsg's PID check.
 func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.playlistID != m.openPlaylistID {
+		return m, nil
+	}
+	m.busy = false
 	if msg.err != nil {
 		m.statusMsg = "load playlist failed: " + msg.err.Error()
 		return m, nil
@@ -191,7 +225,6 @@ func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model,
 		items = append(items, row)
 	}
 	m.playlistItemsList.SetItems(items)
-	m.viewingPlaylist = true
 	m.statusMsg = "loaded " + m.openPlaylistTitle
 	return m, nil
 }
@@ -225,8 +258,14 @@ func (m Model) handlePlaylistCreated(msg playlistCreatedMsg) (tea.Model, tea.Cmd
 	}
 	m.statusMsg = "created " + msg.title
 	row := playlistRow{playlist: store.Playlist{PlaylistID: msg.id, Title: msg.title}}
-	m.playlistsList.SetItems(append(m.playlistsList.Items(), row))
-	m.pickerList.SetItems(append(m.pickerList.Items(), row))
+
+	plItems := append(m.playlistsList.Items(), row)
+	sortPlaylistRows(plItems)
+	m.playlistsList.SetItems(plItems)
+
+	pickerItems := append(m.pickerList.Items(), row)
+	sortPlaylistRows(pickerItems)
+	m.pickerList.SetItems(pickerItems)
 	return m, nil
 }
 
@@ -318,6 +357,7 @@ func loadLikedCmd(cfg *config.Config) tea.Cmd {
 
 func (m Model) handleLikedLoaded(msg likedLoadedMsg) (tea.Model, tea.Cmd) {
 	m.likedLoaded = true
+	m.busy = false
 	if msg.err != nil {
 		m.statusMsg = "load liked videos failed: " + msg.err.Error()
 		return m, nil

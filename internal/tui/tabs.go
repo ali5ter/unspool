@@ -46,16 +46,15 @@ var tabLabels = [...]string{"feed", "queue", "playlists", "liked"}
 // logoHeight is asciiLogo's row count.
 const logoHeight = 2
 
-// headerHeight is the header's total row count: logoHeight plus the 1-row
-// rule that delineates it from the content below. Callers sizing the rest
-// of the layout (listHeight) must match this.
-const headerHeight = logoHeight + 1
+// headerHeight is the header's total row count. Previously logoHeight+1,
+// the +1 for a bottom rule delineating it from the content below — no
+// longer needed now that every column below renders in its own bordered
+// box (columnBox): that box's top edge already marks the boundary, so a
+// second rule right above it was redundant.
+const headerHeight = logoHeight
 
 // renderHeader renders the header: the logo top-left, the tab strip to its
-// right on the logo's bottom row, and a bottom rule (colorLine, matching
-// the list/preview divider) separating it from the content below — none of
-// the row boundaries were otherwise marked, header/content/footer all just
-// abutted directly.
+// right on the logo's bottom row.
 //
 // The tab strip and the gap before it are built as an explicit logoHeight-
 // row block (padTopWithBG), not left for lipgloss.JoinHorizontal to pad up
@@ -82,10 +81,7 @@ func renderHeader(active tab, width int) string {
 	padded := padTopWithBG(row, logoHeight-1, colorPanel)
 
 	left := lipgloss.JoinHorizontal(lipgloss.Bottom, logo, padded)
-	return band.Width(width).
-		Border(lipgloss.NormalBorder(), false, false, true, false).
-		BorderForeground(colorLine).
-		Render(left)
+	return band.Width(width).Render(left)
 }
 
 // padTopWithBG pads a single-line string s with extraRows blank lines
