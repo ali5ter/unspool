@@ -14,15 +14,17 @@ filter.
 
 - **Shorts-free by construction** — sourced from each channel's `UULF` uploads playlist, not
   post-filtered
-- **Local-first store** — plain JSON on disk; `--export json` is close to a straight copy
+- **Local-first store** — plain JSON on disk, designed so a future `--export json` is close to
+  a straight copy
 - **Best-effort AI-slop filtering** — channel mute (reliable) + metadata heuristics (advisory) +
   provenance badges (precise, low recall) + an on-demand LLM inspect hook — never asserts
   certainty
 - **A locally-owned Queue** (Watch Later replacement) that auto-mirrors to a real YouTube
   playlist, and a local watch log (history replacement)
 - **Synthesised recommendations** from your own subscriptions and watch history
-- **mpv playback** with SponsorBlock and audio-only mode
-- **Pipeline mode** — `--json`, `--export`, `--sync`, `--offline` for scripting
+- **mpv playback** with audio-only mode (SponsorBlock is wired end-to-end but currently a no-op —
+  mpv's bundled yt-dlp hook doesn't read the segment data yt-dlp provides; see Configuration)
+- **Pipeline mode** — `--json` and `--sync` today, for scripting; `--export`/`--offline` are planned
 
 ## Installation
 
@@ -89,25 +91,48 @@ store_dir              = ""            # local store path (default: alongside co
 max_resolution         = 1080
 audio_only_default     = false
 playback_detached      = true
-thumbnails             = "auto"        # "auto" | "chafa" | "halfblock" | "off"
-theme                  = "warm-dark"
-view_mode              = "rows"        # "rows" | "grid"
 cookies_from_browser   = ""            # playback auth only; "" | "firefox" | "chrome" | "safari"
-sponsorblock           = ["sponsor", "selfpromo", "interaction"]
+sponsorblock           = ["sponsor", "selfpromo", "interaction"]  # wired, currently a no-op — see Features
 
 [queue]
 mirror                 = true          # keep the Queue synced to a real playlist
 
+[recommendations]
+enabled                = true          # synthesised locally from your subs + watch log, no API cost
+
 [filters]
-hide_shorts            = true
-ai_score_threshold     = 0.7           # dim/hide feed items scoring above this (0 = off)
-ai_autohide            = false         # false = badge+dim; true = hide outright
+# Shorts are already excluded structurally, via each channel's UULF uploads
+# playlist — hide_shorts is a duration-based fallback guard for the rare
+# channel that has no UULF playlist and falls back to the plain UU one.
+hide_shorts             = true
+ai_score_threshold      = 0.7          # badge/hide feed items scoring above this (0 = off)
+ai_autohide             = false        # false = badge only; true = hide outright
 
 [classifier]
-# Model-agnostic shell-out hooks for AI-slop inspection. Empty = metadata heuristics only.
-transcript_command     = ""
-inspect_command        = ""
+# Model-agnostic shell-out hooks for AI-slop inspection — working examples
+# in scripts/, see below. Empty = metadata heuristics only.
+transcript_command       = ""          # tier 1: auto-run on new channels' newest video during --sync
+inspect_command          = ""          # tier 2: on-demand, press `i` on a selected video
+auto_inspect_new_channels = false
+cache_verdicts            = true
 ```
+
+## Scripts
+
+`scripts/` holds what Quick start step 1 runs, plus working examples for the `[classifier]`
+hooks above — `unspool` just shells out to whatever command you configure, so these are
+reference implementations, not hardcoded behaviour:
+
+| Script | Purpose |
+| --- | --- |
+| `setup-gcp.sh` | Creates/selects a GCP project and enables the YouTube Data API v3 (Quick start step 1). |
+| `inspect-gemini.sh` | Example `classifier.inspect_command` (tier 2) — asks Gemini whether the selected video looks AI-generated, on-demand via `i`. |
+| `inspect-transcript-gemini.sh` | Example `classifier.transcript_command` (tier 1) — judges a new channel's newest video from its auto-generated transcript alone, run automatically during `--sync` when `auto_inspect_new_channels = true`. |
+
+The two Gemini scripts need `curl`, `jq`, `yt-dlp`, and a
+[`GEMINI_API_KEY`](https://aistudio.google.com/apikey) — export it, or copy
+`scripts/.env.template` to `scripts/.env` (gitignored) and fill it in there so it survives
+across terminal sessions.
 
 ## Why not just use the YouTube app?
 
