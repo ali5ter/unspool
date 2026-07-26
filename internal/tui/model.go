@@ -476,6 +476,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case inspectDoneMsg:
 		return m.handleInspectDone(msg)
 
+	case thumbnailDebounceMsg:
+		return m.handleThumbnailDebounce(msg)
+
 	case thumbnailLoadedMsg:
 		return m.handleThumbnailLoaded(msg)
 

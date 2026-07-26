@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -109,7 +110,42 @@ func (m *Model) refreshPreview() tea.Cmd {
 		return nil
 	}
 	m.previewContent = m.previewBody
-	return loadThumbnailCmd(m.cfg, video.VideoID, w)
+	return thumbnailDebounceCmd(video.VideoID, w)
+}
+
+// thumbnailDebounceRows is how long selection has to sit still on an
+// uncached video before its thumbnail actually starts loading. Without
+// this, holding Down (or scrolling quickly) spawns a Fetch+Render — and a
+// real chafa subprocess — for every video passed through on the way,
+// which can pile up into several concurrent chafa invocations competing
+// for CPU. Confirmed live: rapid navigation without debouncing made
+// thumbnails take several seconds to appear even though a single
+// Fetch+Render normally completes in well under 100ms.
+const thumbnailDebounceDelay = 150 * time.Millisecond
+
+// thumbnailDebounceMsg fires thumbnailDebounceDelay after a selection
+// change landed on an uncached video. handleThumbnailDebounce only starts
+// the real load if that video is still selected by the time it arrives —
+// otherwise the user has already scrolled past it.
+type thumbnailDebounceMsg struct {
+	videoID string
+	cols    int
+}
+
+func thumbnailDebounceCmd(videoID string, cols int) tea.Cmd {
+	return tea.Tick(thumbnailDebounceDelay, func(time.Time) tea.Msg {
+		return thumbnailDebounceMsg{videoID: videoID, cols: cols}
+	})
+}
+
+func (m Model) handleThumbnailDebounce(msg thumbnailDebounceMsg) (tea.Model, tea.Cmd) {
+	if msg.videoID != m.previewVideoID {
+		return m, nil // scrolled past — never worth loading
+	}
+	if _, ok := m.thumbnailCache[thumbnailCacheKey(msg.videoID, msg.cols)]; ok {
+		return m, nil // arrived some other way (e.g. re-selected) while debouncing
+	}
+	return m, loadThumbnailCmd(m.cfg, msg.videoID, msg.cols)
 }
 
 // thumbnailCacheKey is keyed on cols only (rows is the fixed
