@@ -15,11 +15,14 @@ import (
 var version = "dev"
 
 var (
-	flagLogin  bool
-	flagLogout bool
-	flagSync   bool
-	flagJSON   bool
-	flagNoTTY  bool
+	flagLogin   bool
+	flagLogout  bool
+	flagSync    bool
+	flagJSON    bool
+	flagNoTTY   bool
+	flagExport  string
+	flagOutput  string
+	flagOffline bool
 )
 
 var rootCmd = &cobra.Command{
@@ -35,6 +38,9 @@ func init() {
 	rootCmd.Flags().BoolVar(&flagSync, "sync", false, "refresh the local cache and exit (cron-friendly)")
 	rootCmd.Flags().BoolVar(&flagJSON, "json", false, "dump the feed as a JSON array to stdout (no TUI)")
 	rootCmd.Flags().BoolVar(&flagNoTTY, "no-tty", false, "force pipeline mode")
+	rootCmd.Flags().StringVar(&flagExport, "export", "", "export the feed to a file: json, csv, or markdown")
+	rootCmd.Flags().StringVarP(&flagOutput, "output", "o", "", "export destination (default: stdout)")
+	rootCmd.Flags().BoolVar(&flagOffline, "offline", false, "serve --json/--export from the local store only, no API calls")
 }
 
 // Execute runs the root command and exits non-zero on error.
@@ -57,6 +63,8 @@ func run(_ *cobra.Command, _ []string) error {
 		return runLogout()
 	case flagSync:
 		return runSync(cfg)
+	case flagExport != "":
+		return runExport(cfg)
 	case flagJSON, flagNoTTY, !isTTY():
 		return runPipeline(cfg)
 	default:

@@ -24,7 +24,8 @@ filter.
 - **Synthesised recommendations** from your own subscriptions and watch history
 - **mpv playback** with audio-only mode (SponsorBlock is wired end-to-end but currently a no-op —
   mpv's bundled yt-dlp hook doesn't read the segment data yt-dlp provides; see Configuration)
-- **Pipeline mode** — `--json` and `--sync` today, for scripting; `--export`/`--offline` are planned
+- **Pipeline mode** — `--json`, `--sync`, `--export {json,csv,markdown}` (`-o/--output`, default
+  stdout), and `--offline` (serve `--json`/`--export` from the local store only, no API calls)
 
 ## Installation
 
@@ -79,6 +80,12 @@ unspool --sync
 
 # Feed as JSON, no TUI
 unspool --json | jq '.[] | select(.duration_seconds > 1200)'
+
+# Export the feed — json, csv, or markdown — to a file (default: stdout)
+unspool --export csv -o feed.csv
+
+# Read the local cache with zero API calls (combine with --json or --export)
+unspool --json --offline
 ```
 
 ## Configuration

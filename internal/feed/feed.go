@@ -188,6 +188,64 @@ func Sync(ctx context.Context, cfg *config.Config) (*Result, error) {
 	}, nil
 }
 
+// LoadCached assembles a Result entirely from the local store — no OAuth
+// client, no network calls, no quota spend. It's the read path for
+// `--offline`: the same Item shape and sort order Sync produces, sourced
+// from whatever a prior Sync already cached. QuotaSpent, SkippedChannels,
+// MirrorErr, and AutoInspected are all meaningless without a network round
+// trip, so they're left at their zero values rather than faked.
+func LoadCached(cfg *config.Config) (*Result, error) {
+	st := store.New(cfg.StoreDir)
+
+	subsFile, err := st.LoadSubscriptions()
+	if err != nil {
+		return nil, fmt.Errorf("load subscriptions: %w", err)
+	}
+
+	mutesFile, err := st.LoadMutes()
+	if err != nil {
+		return nil, fmt.Errorf("load mutes: %w", err)
+	}
+	muted := toSet(mutesFile.ChannelIDs)
+
+	feedState, err := st.LoadFeedState()
+	if err != nil {
+		return nil, fmt.Errorf("load feed state: %w", err)
+	}
+
+	channelIDs := make([]string, 0, len(subsFile.Subscriptions))
+	channelTitles := make(map[string]string, len(subsFile.Subscriptions))
+	for _, sub := range subsFile.Subscriptions {
+		if muted[sub.ChannelID] {
+			continue
+		}
+		channelIDs = append(channelIDs, sub.ChannelID)
+		channelTitles[sub.ChannelID] = sub.Title
+	}
+
+	videosByChannel, err := st.VideosByChannel(channelIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load cached videos: %w", err)
+	}
+
+	var items []Item
+	for _, channelID := range channelIDs {
+		for _, v := range videosByChannel[channelID] {
+			items = append(items, Item{Video: v, Channel: channelTitles[channelID], State: feedState.State[v.VideoID]})
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Video.PublishedAt.After(items[j].Video.PublishedAt)
+	})
+
+	return &Result{
+		Items:       items,
+		QuotaSpent:  0,
+		QuotaBudget: api.DailyQuota,
+	}, nil
+}
+
 // syncChannel fetches new videos for one channel (RSS incrementally, or a
 // playlistItems.list backfill on first sync), merges them with the cached
 // set, batches detail lookups for anything missing duration, applies the
