@@ -24,6 +24,10 @@ filter.
 - **Synthesised recommendations** from your own subscriptions and watch history
 - **mpv playback** with audio-only mode (SponsorBlock is wired end-to-end but currently a no-op —
   mpv's bundled yt-dlp hook doesn't read the segment data yt-dlp provides; see Configuration)
+- **Thumbnails in the preview pane** — `chafa`-rendered symbol/half-block art (`"off"` to
+  disable). Real inline-image protocols (kitty/iTerm2/sixel) are deliberately not used even
+  when your terminal supports one — Bubble Tea's renderer can't redraw them reliably; see
+  Configuration
 - **Pipeline mode** — `--json`, `--sync`, `--export {json,csv,markdown}` (`-o/--output`, default
   stdout), and `--offline` (serve `--json`/`--export` from the local store only, no API calls)
 
@@ -47,11 +51,13 @@ cd unspool
 go build -o unspool .
 ```
 
-**Runtime dependencies:** [`mpv`](https://mpv.io) (which uses `yt-dlp` as its stream backend).
+**Runtime dependencies:** [`mpv`](https://mpv.io) (which uses `yt-dlp` as its stream backend),
+and optionally [`chafa`](https://hpjansson.org/chafa/) for preview-pane thumbnails (absent —
+or `thumbnails = "off"` in config — just disables thumbnails, nothing else).
 
 ```bash
 # macOS
-brew install mpv yt-dlp
+brew install mpv yt-dlp chafa
 ```
 
 ## Quick start
@@ -98,6 +104,9 @@ store_dir              = ""            # local store path (default: alongside co
 max_resolution         = 1080
 audio_only_default     = false
 playback_detached      = true
+thumbnails             = "auto"        # "auto" | "chafa" | "halfblock" | "off" — "auto" and
+                                        # "chafa" render identically (both are chafa's
+                                        # symbol/truecolor art); see Features
 cookies_from_browser   = ""            # playback auth only; "" | "firefox" | "chrome" | "safari"
 sponsorblock           = ["sponsor", "selfpromo", "interaction"]  # wired, currently a no-op — see Features
 

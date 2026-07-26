@@ -26,6 +26,7 @@ import (
 	"github.com/ali5ter/unspool/internal/feed"
 	"github.com/ali5ter/unspool/internal/playback"
 	"github.com/ali5ter/unspool/internal/store"
+	"github.com/ali5ter/unspool/internal/thumbnail"
 )
 
 // Model is the top-level Bubble Tea model.
@@ -181,9 +182,19 @@ type Model struct {
 	// selected item or width changes, since Glamour rendering isn't cheap
 	// enough to redo on every View() call.
 	previewVideoID   string
-	previewContent   string
+	previewBody      string // title/channel/meta/description — everything but the thumbnail
+	previewContent   string // previewBody, with a cached thumbnail prepended if one exists
 	previewWidthUsed int
 	previewScroll    int // up/down while the detail column is focused — see handleGlobalKey
+
+	// Thumbnails (PRD §7.4). thumbnailCache maps "<videoID>@<cols>" to
+	// already-rendered chafa output, so a resize (which changes cols)
+	// naturally invalidates stale entries rather than needing an explicit
+	// cache-clear. thumbnailsDisabled is computed once at startup —
+	// cfg.Thumbnails == "off", or chafa missing from PATH — so a missing
+	// dependency doesn't retry a doomed render on every selection change.
+	thumbnailCache     map[string]string
+	thumbnailsDisabled bool
 
 	// playingProcess is the currently-running mpv process, if any — tracked
 	// so the Stop key can kill it even if its window never took focus.
@@ -255,13 +266,15 @@ func New(cfg *config.Config) Model {
 	vf, _ := st.LoadVerdicts()
 
 	return Model{
-		cfg:           cfg,
-		store:         st,
-		verdicts:      vf.Verdicts,
-		keys:          newKeyMap(),
-		feedList:      newListModel(),
-		queueList:     newListModel(),
-		playlistsList: newListModel(),
+		cfg:                cfg,
+		store:              st,
+		verdicts:           vf.Verdicts,
+		thumbnailCache:     map[string]string{},
+		thumbnailsDisabled: cfg.Thumbnails == "off" || thumbnail.CheckDependency() != nil,
+		keys:               newKeyMap(),
+		feedList:           newListModel(),
+		queueList:          newListModel(),
+		playlistsList:      newListModel(),
 		// No title (matches every other list): column 0 already shows
 		// which playlist is highlighted, so repeating its name as a
 		// header here would just be the same information twice.
@@ -360,8 +373,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	next, cmd := m.updateInner(msg)
 	nm := next.(Model)
 	nm.markSeenIfNeeded()
-	nm.refreshPreview()
-	return nm, cmd
+	previewCmd := nm.refreshPreview()
+	return nm, tea.Batch(cmd, previewCmd)
 }
 
 func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -462,6 +475,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case inspectDoneMsg:
 		return m.handleInspectDone(msg)
+
+	case thumbnailLoadedMsg:
+		return m.handleThumbnailLoaded(msg)
 
 	case recommendedLoadedMsg:
 		return m.handleRecommendedLoaded(msg)

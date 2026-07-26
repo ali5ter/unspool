@@ -1,16 +1,30 @@
 package tui
 
 import (
+	"context"
+	"path/filepath"
+	"strconv"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/glamour/styles"
+
+	"github.com/ali5ter/unspool/config"
+	"github.com/ali5ter/unspool/internal/thumbnail"
 )
 
 // previewMinWidth is the terminal width below which the preview pane is
 // dropped entirely and the list takes the full width (PRD §7.1 "Narrow").
 const previewMinWidth = 90
+
+// previewThumbnailRows is the fixed row budget a thumbnail occupies in the
+// preview pane. thumbnail.Render pads its output to span exactly this many
+// embedded newlines, so once spliced into previewContent the existing
+// line-counting scroll math (windowLines/previewScrollMax) accounts for it
+// automatically — no separate height-budget special-casing needed here.
+const previewThumbnailRows = 10
 
 // previewFraction is the preview pane's share of the content width, mirroring
 // wwlog's list/detail 1/3–2/3 split (there the list is the narrow pane; here
@@ -28,12 +42,17 @@ func previewWidth(totalWidth int) int {
 // the Playlists tab's third column are sized differently at the same
 // terminal width, so comparing against raw m.width could wrongly reuse
 // content wrapped for a different width after switching tabs.
-func (m *Model) refreshPreview() {
+//
+// Returns a non-nil tea.Cmd only when a thumbnail needs fetching/rendering
+// for the newly-selected video — the caller (Update) must batch it in,
+// since refreshPreview itself can't return through the normal Update/cmd
+// path (it's called after updateInner already produced one).
+func (m *Model) refreshPreview() tea.Cmd {
 	video, channel, ok := m.selectedVideo()
 	if !ok {
 		m.previewVideoID = ""
 		m.previewContent = styleMeta.Render("Nothing selected.")
-		return
+		return nil
 	}
 	outerW := m.detailColumnOuterWidth()
 	if outerW == 0 {
@@ -42,10 +61,10 @@ func (m *Model) refreshPreview() {
 		m.previewVideoID = video.VideoID
 		m.previewWidthUsed = outerW
 		m.previewContent = ""
-		return
+		return nil
 	}
 	if video.VideoID == m.previewVideoID && m.previewWidthUsed == outerW {
-		return
+		return nil
 	}
 	m.previewVideoID = video.VideoID
 	m.previewWidthUsed = outerW
@@ -78,7 +97,79 @@ func (m *Model) refreshPreview() {
 		lines = append(lines, "", desc)
 	}
 
-	m.previewContent = lipgloss.JoinVertical(lipgloss.Left, lines...)
+	m.previewBody = lipgloss.JoinVertical(lipgloss.Left, lines...)
+
+	if m.thumbnailsDisabled || video.VideoID == "" {
+		m.previewContent = m.previewBody
+		return nil
+	}
+	key := thumbnailCacheKey(video.VideoID, w)
+	if thumb, ok := m.thumbnailCache[key]; ok {
+		m.previewContent = composePreviewWithThumbnail(thumb, m.previewBody)
+		return nil
+	}
+	m.previewContent = m.previewBody
+	return loadThumbnailCmd(m.cfg, video.VideoID, w)
+}
+
+// thumbnailCacheKey is keyed on cols only (rows is the fixed
+// previewThumbnailRows constant) — a terminal resize that changes the
+// preview column's width naturally invalidates a stale cached render.
+func thumbnailCacheKey(videoID string, cols int) string {
+	return videoID + "@" + strconv.Itoa(cols)
+}
+
+func composePreviewWithThumbnail(thumb, body string) string {
+	return lipgloss.JoinVertical(lipgloss.Left, thumb, "", body)
+}
+
+// thumbnailLoadedMsg carries the result of a loadThumbnailCmd back to the
+// model. key is the cache key the render was requested for; videoID is the
+// staleness guard, compared against m.previewVideoID at receipt — same
+// shape as inspectDoneMsg's videoID check.
+type thumbnailLoadedMsg struct {
+	videoID string
+	key     string
+	output  string
+	err     error
+}
+
+// loadThumbnailCmd fetches (and caches on disk) videoID's thumbnail, then
+// renders it via chafa at cols wide / previewThumbnailRows tall. Runs off
+// the update loop — network plus a subprocess, so it must not block —
+// matching how sync/inspect/search-escalation are already handled.
+func loadThumbnailCmd(cfg *config.Config, videoID string, cols int) tea.Cmd {
+	return func() tea.Msg {
+		key := thumbnailCacheKey(videoID, cols)
+		ctx := context.Background()
+		cacheDir := filepath.Join(cfg.StoreDir, "thumbnails")
+		path, err := thumbnail.Fetch(ctx, videoID, cacheDir)
+		if err != nil {
+			return thumbnailLoadedMsg{videoID: videoID, key: key, err: err}
+		}
+		out, err := thumbnail.Render(ctx, path, cols, previewThumbnailRows, cfg.Thumbnails)
+		return thumbnailLoadedMsg{videoID: videoID, key: key, output: out, err: err}
+	}
+}
+
+// handleThumbnailLoaded caches a rendered thumbnail (success only — a
+// failure isn't cached, so the next time this video is selected it's
+// simply retried rather than remembered as permanently broken) and, if the
+// video is still the one selected, patches it into the already-rendered
+// preview immediately rather than waiting for some unrelated change to
+// pick it up — same idea as handleInspectDone's patchInspectedBadge.
+func (m Model) handleThumbnailLoaded(msg thumbnailLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		return m, nil // best-effort — a missing/failed thumbnail is never surfaced to the user
+	}
+	if m.thumbnailCache == nil {
+		m.thumbnailCache = map[string]string{}
+	}
+	m.thumbnailCache[msg.key] = msg.output
+	if msg.videoID == m.previewVideoID {
+		m.previewContent = composePreviewWithThumbnail(msg.output, m.previewBody)
+	}
+	return m, nil
 }
 
 // renderDescription renders a video description as Glamour-styled markdown,

@@ -8,12 +8,18 @@ import (
 
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/playback"
+	"github.com/ali5ter/unspool/internal/thumbnail"
 	"github.com/ali5ter/unspool/internal/tui"
 )
 
 func runTUI(cfg *config.Config) error {
 	if err := playback.CheckDependencies(); err != nil {
 		fmt.Fprintln(os.Stderr, "warning:", err)
+	}
+	if cfg.Thumbnails != "off" {
+		if err := thumbnail.CheckDependency(); err != nil {
+			fmt.Fprintln(os.Stderr, "warning:", err)
+		}
 	}
 	p := tea.NewProgram(tui.New(cfg))
 	_, err := p.Run()
