@@ -124,8 +124,41 @@ func buildArgs(cfg *config.Config, audioOnly bool) []string {
 	if audioOnly || cfg.AudioOnlyDefault {
 		args = append(args, "--no-video")
 	}
-	if cfg.CookiesFromBrowser != "" {
-		args = append(args, "--ytdl-raw-options=cookies-from-browser="+cfg.CookiesFromBrowser)
+	if rawOpts := ytdlRawOptions(cfg); rawOpts != "" {
+		args = append(args, "--ytdl-raw-options="+rawOpts)
 	}
 	return args
+}
+
+// ytdlRawOptions builds mpv's single --ytdl-raw-options value from every
+// configured yt-dlp passthrough option. These must all land in one
+// argument, not one --ytdl-raw-options= flag per option: mpv's raw-options
+// use set (not merge) semantics on repeated flags, so a second
+// --ytdl-raw-options= would silently overwrite the first rather than add to
+// it — confirmed a real risk here specifically, since cookies-from-browser
+// and SponsorBlock (on by default, three categories) are both non-empty in
+// a typical config.
+func ytdlRawOptions(cfg *config.Config) string {
+	var opts []string
+	if cfg.CookiesFromBrowser != "" {
+		opts = append(opts, "cookies-from-browser="+cfg.CookiesFromBrowser)
+	}
+	if len(cfg.SponsorBlock) > 0 {
+		// The raw-options value is itself a comma-separated list of
+		// key=value pairs, so a value containing its own commas (the
+		// category list) needs mpv's own %LEN%literal-string quoting, not
+		// a backslash escape — backslash-comma is yt-dlp's escaping
+		// convention, not mpv's option-parser's, and mpv treats it as a
+		// fatal parse error (confirmed directly: mpv refused to start at
+		// all with a backslash-escaped value, which is what "can't play
+		// any videos" turned out to be — every single playback attempt
+		// hit this, not just ones with SponsorBlock categories set,
+		// because ytdlRawOptions always includes them from the default
+		// config). %LEN% (e.g. %29%sponsor,selfpromo,interaction) tells
+		// mpv's parser to treat exactly LEN following bytes as a literal
+		// value, commas and all.
+		categories := strings.Join(cfg.SponsorBlock, ",")
+		opts = append(opts, fmt.Sprintf("sponsorblock-mark=%%%d%%%s", len(categories), categories))
+	}
+	return strings.Join(opts, ",")
 }

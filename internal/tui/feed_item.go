@@ -10,6 +10,11 @@ import (
 // feedItem adapts a feed.Item to bubbles/list's DefaultItem interface.
 type feedItem struct {
 	feed.Item
+	// aiBadge is precomputed at item-build time (handleSyncDone) via
+	// aiBadgeFor — combines the heuristic score and any cached inspect
+	// verdict, so Description() doesn't need its own reference to the
+	// config or verdict cache.
+	aiBadge string
 }
 
 func (i feedItem) FilterValue() string { return i.Video.Title + " " + i.Channel }
@@ -29,6 +34,7 @@ func (i feedItem) Description() string {
 	if i.Video.ContainsSyntheticMedia {
 		badge = "  ◆ synthetic media"
 	}
+	badge += i.aiBadge
 	if i.State.Seen {
 		badge += "  ✓"
 	}

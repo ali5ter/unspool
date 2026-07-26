@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"math/rand/v2"
 	"os"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ type Model struct {
 	playlistsList     list.Model
 	playlistItemsList list.Model
 	likedList         list.Model
+	recommendedList   list.Model
 
 	spinner spinner.Model
 
@@ -48,6 +50,11 @@ type Model struct {
 	quotaSpent  int
 	quotaBudget int
 	statusMsg   string
+
+	// aiHiddenCount accumulates across every resync this session (not reset
+	// per sync) — PRD §5.2's "hidden this session" count for ai_autohide.
+	// Nothing behind it is ever deleted; see handleSyncDone.
+	aiHiddenCount int
 
 	// busy is true only while a real async operation is in flight that a
 	// spinner.Tick chain was explicitly started for (sync, loading
@@ -63,6 +70,16 @@ type Model struct {
 	// spinner glyph and the notice-text color sweep in statusLine, so a
 	// busy state reads as alive rather than a static amber label.
 	pulseTick int
+
+	// logoSweeping/logoSweepTick drive an occasional single pulse across
+	// the header logo — a "still alive" pulse independent of m.busy,
+	// unlike pulseTick above: it fires on its own ~60s timer
+	// (logoSweepIntervalCmd) regardless of whether anything else is
+	// happening, runs for exactly one sweep pass (logoSweepTickCmd, ticking
+	// until logoSweepTotalTicks is reached), then goes still again until
+	// the next interval — deliberately not a continuous animation.
+	logoSweeping  bool
+	logoSweepTick int
 
 	width, height int
 
@@ -103,9 +120,45 @@ type Model struct {
 	pickerMoveItemID string
 	pickerMoveFromID string
 
+	// pendingPlaylistJump is set by jumpToPlaylist (search's Enter-on-a-
+	// playlist-result action) when playlists haven't been loaded yet in
+	// this session — same "wait for the load, then act" shape as
+	// pickerPending. Consumed in handlePlaylistsLoaded, which selects this
+	// playlist ID once m.playlistsList is actually populated. Without
+	// this, jumping to a playlist match before ever visiting the
+	// Playlists tab (or opening the add-to-playlist picker) silently did
+	// nothing — confirmed live: a fresh session's playlistsList is empty,
+	// so the naive "find and select by ID" loop in jumpToPlaylist never
+	// found anything to select.
+	pendingPlaylistJump string
+
 	// "create playlist" input overlay.
 	creatingPlaylist bool
 	newPlaylistInput textinput.Model
+
+	// Rationed search (PRD §5.5): "/" opens a query input, Enter runs a
+	// free local-cache search and opens a results dialog; "y" inside the
+	// results dialog escalates to a live search.list call. searchesUsed
+	// tracks that escalation specifically — api.Client's Quota resets per
+	// action (newClient builds a fresh one each call, not session-
+	// cumulative), so this is a deliberately separate, simpler counter
+	// rather than retrofitting a session-wide quota tracker.
+	searchActive        bool
+	searchInput         textinput.Model
+	searchResultsActive bool
+	searchResultsList   list.Model
+	searchQuery         string
+	searchesUsed        int
+
+	// "inspect" (tier-2 on-demand LLM classifier, PRD §5.2.4) overlay.
+	// inspectVideoID is the video an in-flight inspectCmd was dispatched
+	// for — a request-time ID compared at the handler (same staleness-
+	// guard shape as openPlaylistID/playlistItemsLoadedMsg) so a result for
+	// a video the user has since navigated away from is silently discarded.
+	inspecting     bool
+	inspectVideoID string
+	inspectResult  store.Verdict
+	inspectErr     error
 
 	// "delete playlist" confirm overlay.
 	deletingPlaylist    bool
@@ -113,6 +166,16 @@ type Model struct {
 	deletePlaylistTitle string
 
 	likedLoaded bool
+
+	// Recommended tab (PRD §5.8) — lazily built on first view, same shape
+	// as likedLoaded/loadLikedCmd.
+	recommendedLoaded bool
+
+	// verdicts is an in-memory copy of verdicts.json (videoID -> cached
+	// inspect result), loaded once at startup and kept in sync as new
+	// verdicts are cached (see handleInspectDone) — read by aiBadgeFor on
+	// every row build rather than hitting disk per row.
+	verdicts map[string]store.Verdict
 
 	// Preview pane (PRD §7.1) — cached and only recomputed when the
 	// selected item or width changes, since Glamour rendering isn't cheap
@@ -159,6 +222,18 @@ func New(cfg *config.Config) Model {
 		// compact regardless of feed size.
 		l.SetShowPagination(true)
 		l.Paginator.Type = paginator.Arabic
+		// bubbles/list.Model has its OWN built-in quit keybinding — "q"
+		// AND "esc" both return tea.Quit directly from inside the list's
+		// own Update(), completely independent of unspool's key handling.
+		// This had been silently exiting the whole app whenever an
+		// unhandled "esc" fell all the way through to a bare
+		// list.Update() call with no overlay/dialog active to intercept
+		// it first (confirmed live: reproduced by pressing esc right
+		// after an inspect that failed silently, where no dialog ever
+		// opened to catch the key) — but the same latent bug applies to
+		// pressing esc on *any* tab with nothing open, not just that one
+		// path; it just happened to surface there first.
+		l.DisableQuitKeybindings()
 		return l
 	}
 
@@ -171,9 +246,18 @@ func New(cfg *config.Config) Model {
 	ti := textinput.New()
 	ti.Placeholder = "playlist title"
 
+	si := textinput.New()
+	si.Placeholder = "search"
+
+	st := store.New(cfg.StoreDir)
+	// Best-effort: an empty/missing verdicts.json just means no cached
+	// verdicts yet, not an error worth surfacing at startup.
+	vf, _ := st.LoadVerdicts()
+
 	return Model{
 		cfg:           cfg,
-		store:         store.New(cfg.StoreDir),
+		store:         st,
+		verdicts:      vf.Verdicts,
 		keys:          newKeyMap(),
 		feedList:      newListModel(),
 		queueList:     newListModel(),
@@ -183,7 +267,9 @@ func New(cfg *config.Config) Model {
 		// header here would just be the same information twice.
 		playlistItemsList: newListModel(),
 		likedList:         newListModel(),
+		recommendedList:   newListModel(),
 		pickerList:        newListModel(),
+		searchResultsList: newListModel(),
 		spinner:           sp,
 		syncing:           true,
 		busy:              true,
@@ -191,6 +277,7 @@ func New(cfg *config.Config) Model {
 		statusMsg:         "syncing…",
 		videoIndex:        map[string]feed.Item{},
 		newPlaylistInput:  ti,
+		searchInput:       si,
 	}
 }
 
@@ -219,7 +306,44 @@ type statusErrMsg struct {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, runSync(m.cfg))
+	return tea.Batch(m.spinner.Tick, runSync(m.cfg), logoSweepIntervalCmd())
+}
+
+// logoSweepMinInterval/logoSweepMaxInterval bound how often the header logo
+// gets one pulse — a "still alive" signal independent of anything else
+// happening, not a continuous animation. Randomized per pass rather than a
+// fixed interval so it doesn't read as a metronome; the lower bound is 42
+// seconds on purpose (the Hitchhiker's Guide answer), not a tuned value.
+const (
+	logoSweepMinInterval = 42 * time.Second
+	logoSweepMaxInterval = 60 * time.Second
+)
+
+// randomLogoSweepInterval picks a uniform random delay in
+// [logoSweepMinInterval, logoSweepMaxInterval).
+func randomLogoSweepInterval() time.Duration {
+	span := logoSweepMaxInterval - logoSweepMinInterval
+	return logoSweepMinInterval + time.Duration(rand.Int64N(int64(span)))
+}
+
+// logoSweepTickInterval is deliberately faster than sweepText's own ~83ms
+// (MiniDot) cadence — the logo pulse is a quick glint, not a sustained busy
+// indicator, and 83ms read as sluggish for something this short-lived.
+const logoSweepTickInterval = 40 * time.Millisecond
+
+// logoSweepTriggerMsg fires every logoSweepInterval, starting one sweep
+// pass across the header logo.
+type logoSweepTriggerMsg struct{}
+
+// logoSweepTickMsg advances an in-progress sweep pass by one frame.
+type logoSweepTickMsg struct{}
+
+func logoSweepIntervalCmd() tea.Cmd {
+	return tea.Tick(randomLogoSweepInterval(), func(time.Time) tea.Msg { return logoSweepTriggerMsg{} })
+}
+
+func logoSweepTickCmd() tea.Cmd {
+	return tea.Tick(logoSweepTickInterval, func(time.Time) tea.Msg { return logoSweepTickMsg{} })
 }
 
 func runSync(cfg *config.Config) tea.Cmd {
@@ -250,6 +374,7 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.feedList.SetSize(lw, ch)
 		m.queueList.SetSize(lw, ch)
 		m.likedList.SetSize(lw, ch)
+		m.recommendedList.SetSize(lw, ch)
 
 		// Playlists' three columns split the width differently from
 		// Feed/Queue/Liked's list+detail split — see playlistsColumnWidths.
@@ -262,6 +387,7 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		m.pickerList.SetSize(modalListSize(msg.Width, msg.Height))
+		m.searchResultsList.SetSize(modalListSize(msg.Width, msg.Height))
 
 		if n := m.activeColumnCount(); m.focusedColumn >= n {
 			m.focusedColumn = n - 1
@@ -299,6 +425,26 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case logoSweepTriggerMsg:
+		m.logoSweeping = true
+		m.logoSweepTick = 0
+		// Reschedule immediately — a self-perpetuating loop, same idiom as
+		// spinner.Tick — so the pulse keeps recurring for the life of the
+		// program, not just once.
+		return m, tea.Batch(logoSweepTickCmd(), logoSweepIntervalCmd())
+
+	case logoSweepTickMsg:
+		if !m.logoSweeping {
+			return m, nil // a stale tick from a pass that already finished
+		}
+		m.logoSweepTick++
+		_, logoWidth := logoLines()
+		if m.logoSweepTick >= logoSweepTotalTicks(logoWidth) {
+			m.logoSweeping = false
+			return m, nil
+		}
+		return m, logoSweepTickCmd()
+
 	case playlistsLoadedMsg:
 		return m.handlePlaylistsLoaded(msg)
 
@@ -313,6 +459,15 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case likedLoadedMsg:
 		return m.handleLikedLoaded(msg)
+
+	case inspectDoneMsg:
+		return m.handleInspectDone(msg)
+
+	case recommendedLoadedMsg:
+		return m.handleRecommendedLoaded(msg)
+
+	case searchYouTubeDoneMsg:
+		return m.handleSearchYouTubeDone(msg)
 
 	case playbackStartedMsg:
 		// m.busy stays false here, deliberately: unlike sync/loading,
@@ -364,6 +519,15 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.pickerActive {
 			return m.updatePicker(msg)
 		}
+		if m.inspecting {
+			return m.updateInspecting(msg)
+		}
+		if m.searchActive {
+			return m.updateSearchInput(msg)
+		}
+		if m.searchResultsActive {
+			return m.updateSearchResults(msg)
+		}
 		if handled, next, cmd := m.handleGlobalKey(msg); handled {
 			return next, cmd
 		}
@@ -394,20 +558,43 @@ func (m Model) handleSyncDone(msg syncDoneMsg) (tea.Model, tea.Cmd) {
 
 	items := make([]list.Item, 0, len(msg.result.Items))
 	m.videoIndex = make(map[string]feed.Item, len(msg.result.Items))
+	hiddenThisSync := 0
 	for _, it := range msg.result.Items {
-		items = append(items, feedItem{it})
+		// videoIndex is populated for every item regardless of autohide, so
+		// Queue/Playlist rows that reference a hidden video still resolve —
+		// autohide only affects what's rendered in the Feed list itself,
+		// nothing is ever deleted (PRD §5.2/§12: every hide is reversible).
 		m.videoIndex[it.Video.VideoID] = it
+		badge := m.aiBadgeFor(it.Video.VideoID, it.State.AIScore)
+		if m.cfg.Filters.AIAutohide && badge != "" {
+			hiddenThisSync++
+			continue
+		}
+		items = append(items, feedItem{Item: it, aiBadge: badge})
 	}
 	m.feedList.SetItems(items)
 	m.refreshQueueList()
+	// Accumulated across resyncs within a session (PRD §5.2: "hidden this
+	// session"), not overwritten each time.
+	m.aiHiddenCount += hiddenThisSync
 
-	switch {
-	case msg.result.MirrorErr != nil:
-		m.statusMsg = "synced (queue mirror failed: " + msg.result.MirrorErr.Error() + ")"
-	case len(msg.result.SkippedChannels) > 0:
-		m.statusMsg = fmt.Sprintf("synced (%d channels skipped)", len(msg.result.SkippedChannels))
-	default:
+	var extra []string
+	if msg.result.MirrorErr != nil {
+		extra = append(extra, "queue mirror failed: "+msg.result.MirrorErr.Error())
+	}
+	if len(msg.result.SkippedChannels) > 0 {
+		extra = append(extra, fmt.Sprintf("%d channels skipped", len(msg.result.SkippedChannels)))
+	}
+	if msg.result.AutoInspected > 0 {
+		extra = append(extra, fmt.Sprintf("%d auto-inspected", msg.result.AutoInspected))
+	}
+	if hiddenThisSync > 0 {
+		extra = append(extra, fmt.Sprintf("%d hidden as likely AI", hiddenThisSync))
+	}
+	if len(extra) == 0 {
 		m.statusMsg = "synced"
+	} else {
+		m.statusMsg = "synced (" + strings.Join(extra, ", ") + ")"
 	}
 	return m, cmd
 }
@@ -502,6 +689,19 @@ func (m Model) handleGlobalKey(msg tea.KeyPressMsg) (bool, Model, tea.Cmd) {
 			m.focusedColumn--
 		}
 		return true, m, nil
+	case key.Matches(msg, m.keys.Inspect):
+		return m.startInspect()
+	case key.Matches(msg, m.keys.Search):
+		m.searchActive = true
+		m.searchInput.SetValue("")
+		return true, m, tea.Batch(clearScreenCmd(), m.searchInput.Focus())
+	case key.Matches(msg, m.keys.Sweep):
+		// Manual trigger, independent of logoSweepIntervalCmd's own
+		// self-rescheduling loop — doesn't touch or reset that timer, so
+		// firing this doesn't delay the next periodic pass.
+		m.logoSweeping = true
+		m.logoSweepTick = 0
+		return true, m, logoSweepTickCmd()
 	case key.Matches(msg, m.keys.Up):
 		// Only intercepted while the detail column has focus — otherwise
 		// falls through (handled=false) so the tab handler forwards it to
@@ -562,6 +762,19 @@ func (m *Model) onTabChanged() tea.Cmd {
 			m.statusMsg = "loading liked videos…"
 			m.busy = true
 			cmds = append(cmds, loadLikedCmd(m.cfg), m.spinner.Tick)
+		}
+	case tabRecommended:
+		if !m.recommendedLoaded {
+			if !m.cfg.Recommendations.Enabled {
+				m.recommendedLoaded = true
+				m.recommendedList.SetItems([]list.Item{
+					noticeRow{text: "Recommendations disabled — enable [recommendations].enabled in config.toml"},
+				})
+			} else {
+				m.statusMsg = "loading recommendations…"
+				m.busy = true
+				cmds = append(cmds, loadRecommendedCmd(m.cfg), m.spinner.Tick)
+			}
 		}
 	}
 	return tea.Batch(cmds...)
@@ -640,10 +853,14 @@ func (m Model) View() tea.View {
 		view = m.overlayModal(m.renderCreatePlaylist())
 	case m.deletingPlaylist:
 		view = m.overlayModal(m.renderDeletePlaylist())
+	case m.inspecting:
+		view = m.overlayModal(m.renderInspect())
+	case m.searchActive:
+		view = m.overlayModal(m.renderSearchInput())
+	case m.searchResultsActive:
+		view = m.overlayModal(m.renderSearchResults())
 	default:
-		header := renderHeader(m.activeTab, m.width)
-		status := styleStatusBar.Width(m.width).Render(m.statusLine())
-		view = lipgloss.JoinVertical(lipgloss.Left, header, m.viewBody(), status)
+		view = m.renderMainView()
 	}
 
 	v := tea.NewView(view)
@@ -675,7 +892,7 @@ func (m Model) viewBody() string {
 func (m Model) viewSplash() string {
 	text := m.spinnerGlyph() + "  Syncing your subscriptions…"
 	notice := sweepText(text, m.pulseTick, colorPanel)
-	dialog := renderDialog("unspool", notice, "ctrl+c to quit")
+	dialog := renderDialogNoTitle(notice, "ctrl+c to quit")
 	content := lipgloss.JoinVertical(lipgloss.Center, renderLogo(), "", dialog)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
@@ -698,6 +915,14 @@ func (m Model) footerHints() []hint {
 	default:
 		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"m", "mute"}, {"l", "like"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	}
+	// Inspect and Search both work from any tab (handleGlobalKey) — hinted
+	// unconditionally here rather than duplicated into every switch case
+	// above, which is exactly how "i inspect" went missing from Queue and
+	// Playlists's own hint lists the first time: it only ever got added to
+	// this default case, not to handlePlaylistsKey's/Queue's separate
+	// hardcoded lists, even though the key itself worked fine on every tab
+	// all along — just never advertised outside Feed/Liked/Recommended.
+	hints = append(hints, hint{"i", "inspect"}, hint{"/", "search"})
 	// Only relevant where there's more than one column to move focus
 	// between — no point hinting it over a single-column narrow layout.
 	if m.activeColumnCount() > 1 {
@@ -736,6 +961,9 @@ func (m Model) statusLine() string {
 
 	quota := labelStyle.Render(fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget))
 	line1 := left + band.Render("   ") + quota
+	if m.aiHiddenCount > 0 {
+		line1 += band.Render("   ") + labelStyle.Render(fmt.Sprintf("%d hidden", m.aiHiddenCount))
+	}
 
 	return line1 + "\n" + m.renderNotice()
 }
@@ -795,8 +1023,43 @@ func firstLine(s string) string {
 	return first
 }
 
+// renderMainView renders the normal (no overlay) screen: header, the
+// active tab's body, and the footer — factored out so overlayModal can
+// composite a dialog on top of it instead of a blank canvas.
+func (m Model) renderMainView() string {
+	header := renderHeader(m.activeTab, m.width, m.logoSweeping, m.logoSweepTick)
+	status := styleStatusBar.Width(m.width).Render(m.statusLine())
+	return lipgloss.JoinVertical(lipgloss.Left, header, m.viewBody(), status)
+}
+
+// overlayModal composites dialog, centered, on top of the current screen —
+// whatever tab/state the user was looking at stays visible around and
+// behind the dialog, rather than being replaced by blank space. Previously
+// this was `lipgloss.Place(m.width, m.height, Center, Center, dialog)`,
+// which only ever placed the dialog on an empty canvas — every dialog in
+// the app (picker, new/delete playlist, inspect, search) shared this same
+// gap, not just one of them; confirmed by reading the code, not guessing,
+// after a report that the inspect dialog had no background at all.
+//
+// Uses lipgloss.Compositor, not a bare Canvas.Compose call — Canvas.Compose
+// hands a Layer the canvas's own full bounds to draw into directly, which
+// silently ignores that Layer's X/Y entirely (confirmed live: an initial
+// attempt using Canvas.Compose alone rendered nothing where the dialog
+// should have been). Compositor is what actually resolves each layer's X/Y
+// into an absolute rectangle before drawing it.
 func (m Model) overlayModal(dialog string) string {
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, dialog)
+	dw, dh := lipgloss.Width(dialog), lipgloss.Height(dialog)
+	dx, dy := (m.width-dw)/2, (m.height-dh)/2
+	if dx < 0 {
+		dx = 0
+	}
+	if dy < 0 {
+		dy = 0
+	}
+
+	bg := lipgloss.NewLayer(m.renderMainView()).X(0).Y(0).Z(0)
+	fg := lipgloss.NewLayer(dialog).X(dx).Y(dy).Z(1)
+	return lipgloss.NewCompositor(bg, fg).Render()
 }
 
 // playSelected launches mpv on the currently selected video, whichever tab
@@ -870,6 +1133,17 @@ func (m Model) stopPlayback() (tea.Model, tea.Cmd) {
 // selectedVideo returns the video (and its channel title, where known)
 // selected in the currently active tab's list.
 func (m Model) selectedVideo() (store.Video, string, bool) {
+	// Checked ahead of the activeTab switch below: once the search-results
+	// overlay is open, actions (play/like/queue/add-to-playlist) need to
+	// act on whatever's highlighted in that overlay's own list, not
+	// whatever's highlighted in the tab underneath it — activeTab alone
+	// can't distinguish the two.
+	if m.searchResultsActive {
+		if sel, ok := m.searchResultsList.SelectedItem().(searchResultRow); ok && sel.result.Kind == "video" {
+			return sel.result.Video, sel.result.Channel, true
+		}
+		return store.Video{}, "", false
+	}
 	switch m.activeTab {
 	case tabFeed:
 		if sel, ok := m.feedList.SelectedItem().(feedItem); ok {
@@ -889,6 +1163,10 @@ func (m Model) selectedVideo() (store.Video, string, bool) {
 			video.VideoID = sel.ref.VideoID
 			video.Title = sel.ref.Title
 			return video, sel.channel, true
+		}
+	case tabRecommended:
+		if sel, ok := m.recommendedList.SelectedItem().(recommendedRow); ok {
+			return sel.item.Video, sel.item.Channel, true
 		}
 	}
 	return store.Video{}, "", false

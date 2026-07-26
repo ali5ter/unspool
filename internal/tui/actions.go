@@ -12,6 +12,7 @@ import (
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/api"
 	"github.com/ali5ter/unspool/internal/queue"
+	"github.com/ali5ter/unspool/internal/recommend"
 	"github.com/ali5ter/unspool/internal/store"
 )
 
@@ -109,6 +110,7 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 	if msg.err != nil {
 		m.statusMsg = "load playlists failed: " + msg.err.Error()
 		m.pickerPending = false
+		m.pendingPlaylistJump = ""
 		return m, nil
 	}
 
@@ -135,6 +137,11 @@ func (m Model) handlePlaylistsLoaded(msg playlistsLoadedMsg) (tea.Model, tea.Cmd
 		m.pickerList.SetItems(items)
 	}
 	m.statusMsg = "loaded playlists"
+
+	if m.pendingPlaylistJump != "" {
+		m.selectPlaylistByID(m.pendingPlaylistJump)
+		m.pendingPlaylistJump = ""
+	}
 
 	var cmds []tea.Cmd
 	if m.activeTab == tabPlaylists {
@@ -222,6 +229,7 @@ func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model,
 			row.video = it.Video
 			row.channel = it.Channel
 		}
+		row.aiBadge = m.aiBadgeFor(ref.VideoID, 0)
 		items = append(items, row)
 	}
 	m.playlistItemsList.SetItems(items)
@@ -364,9 +372,49 @@ func (m Model) handleLikedLoaded(msg likedLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	items := make([]list.Item, 0, len(msg.videos))
 	for _, v := range msg.videos {
-		items = append(items, likedRow{video: v})
+		items = append(items, likedRow{video: v, aiBadge: m.aiBadgeFor(v.VideoID, 0)})
 	}
 	m.likedList.SetItems(items)
 	m.statusMsg = "loaded liked videos"
+	return m, nil
+}
+
+// recommendedLoadedMsg carries the result of loadRecommendedCmd. Unlike
+// every other lazy-load command, this one never touches the network — it's
+// entirely a local computation (PRD §5.8) — but it still runs through the
+// same async+spinner path as Liked/Playlists for a consistent lazy-load UX
+// rather than special-casing "this one happens to be free."
+type recommendedLoadedMsg struct {
+	items []recommend.Item
+	err   error
+}
+
+func loadRecommendedCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		items, err := recommend.Build(store.New(cfg.StoreDir))
+		return recommendedLoadedMsg{items: items, err: err}
+	}
+}
+
+func (m Model) handleRecommendedLoaded(msg recommendedLoadedMsg) (tea.Model, tea.Cmd) {
+	m.recommendedLoaded = true
+	m.busy = false
+	if msg.err != nil {
+		m.statusMsg = "load recommendations failed: " + msg.err.Error()
+		return m, nil
+	}
+	if len(msg.items) == 0 {
+		m.recommendedList.SetItems([]list.Item{
+			noticeRow{text: "No recommendations yet — watch a few videos and sync again."},
+		})
+		m.statusMsg = "loaded recommendations"
+		return m, nil
+	}
+	items := make([]list.Item, 0, len(msg.items))
+	for _, it := range msg.items {
+		items = append(items, recommendedRow{item: it, aiBadge: m.aiBadgeFor(it.Video.VideoID, 0)})
+	}
+	m.recommendedList.SetItems(items)
+	m.statusMsg = "loaded recommendations"
 	return m, nil
 }

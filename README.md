@@ -10,12 +10,6 @@ filter.
 
 ![unspool demo](examples/unspool_demo.gif)
 
-## Status
-
-**v1.1.0 — M1 + M2 shipped**: read-only feed, plus Queue (auto-mirrored to a real playlist),
-Playlists (create/open/add/remove/delete), Liked, channel mute, and mark-as-seen. M3 (AI-slop
-heuristics, the LLM inspect hook, a synthesised Recommended tab, search, SponsorBlock) is next.
-
 ## Features (target, per milestone)
 
 - **Shorts-free by construction** — sourced from each channel's `UULF` uploads playlist, not

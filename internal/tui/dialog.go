@@ -28,3 +28,24 @@ func renderDialog(title, body, hint string) string {
 	)
 	return styleDialogBox.Render(inner)
 }
+
+// renderDialogNoTitle is renderDialog without a title row — for the splash
+// screen, which sits directly under the logo (renderLogo, already reading
+// "UNSPOOL"); repeating "unspool" as the dialog's own title too was pure
+// duplication with nothing else on screen to disambiguate.
+func renderDialogNoTitle(body, hint string) string {
+	hintR := styleDialogHint.Render(hint)
+
+	width := lipgloss.Width(body)
+	if w := lipgloss.Width(hintR); w > width {
+		width = w
+	}
+	pad := lipgloss.NewStyle().Background(colorPanel).Width(width)
+
+	inner := lipgloss.JoinVertical(lipgloss.Left,
+		pad.Render(body),
+		pad.Render(""),
+		pad.Render(hintR),
+	)
+	return styleDialogBox.Render(inner)
+}

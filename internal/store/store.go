@@ -12,6 +12,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Store reads and writes unspool's JSON files under Dir.
@@ -258,4 +259,35 @@ func (s *Store) LoadVerdicts() (VerdictsFile, error) {
 func (s *Store) SaveVerdicts(f VerdictsFile) error {
 	f.SchemaVersion = schemaVersion
 	return saveJSON(s.path("verdicts.json"), f)
+}
+
+// SetVerdict caches a single video's classifier verdict in verdicts.json,
+// stamping VideoID/CheckedAt.
+func (s *Store) SetVerdict(videoID string, v Verdict) error {
+	f, err := s.LoadVerdicts()
+	if err != nil {
+		return err
+	}
+	v.VideoID = videoID
+	v.CheckedAt = time.Now()
+	f.Verdicts[videoID] = v
+	return s.SaveVerdicts(f)
+}
+
+// VideosByChannel loads every listed channel's cached videos, keyed by
+// channel ID — shared by the recommendation engine and local-cache search,
+// both of which need to scan cached metadata across every subscribed
+// channel at once. There's no cross-channel index file on disk (videos are
+// sharded one file per channel, see videoPath), so this is a loop over
+// LoadVideos, not a single read.
+func (s *Store) VideosByChannel(channelIDs []string) (map[string][]Video, error) {
+	out := make(map[string][]Video, len(channelIDs))
+	for _, id := range channelIDs {
+		vf, err := s.LoadVideos(id)
+		if err != nil {
+			return nil, err
+		}
+		out[id] = vf.Videos
+	}
+	return out, nil
 }

@@ -22,6 +22,8 @@ func (m Model) handleTabKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handlePlaylistsKey(msg)
 	case tabLiked:
 		return m.handleLikedKey(msg)
+	case tabRecommended:
+		return m.handleRecommendedKey(msg)
 	}
 	return m.updateActiveList(msg)
 }
@@ -123,6 +125,29 @@ func (m Model) handleLikedKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleRecommendedKey mirrors handleFeedKey — a recommendation is just a
+// video with a "why", so it gets the same action set (PRD §5.8 rows are
+// actionable the same way Feed rows are).
+func (m Model) handleRecommendedKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, m.keys.Play):
+		return m, m.playSelected(false)
+	case key.Matches(msg, m.keys.AudioOnly):
+		return m, m.playSelected(true)
+	case key.Matches(msg, m.keys.AddQueue):
+		return m.addSelectedToQueue()
+	case key.Matches(msg, m.keys.Mute):
+		return m.muteSelectedChannel()
+	case key.Matches(msg, m.keys.Like):
+		return m, m.likeSelected()
+	case key.Matches(msg, m.keys.AddToList):
+		return m.openPickerForSelected()
+	}
+	var cmd tea.Cmd
+	m.recommendedList, cmd = m.recommendedList.Update(msg)
+	return m, cmd
+}
+
 // updateActiveList forwards a non-key message (e.g. list-internal ticks) to
 // whichever list the active tab is currently showing.
 func (m Model) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -140,6 +165,8 @@ func (m Model) updateActiveList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case tabLiked:
 		m.likedList, cmd = m.likedList.Update(msg)
+	case tabRecommended:
+		m.recommendedList, cmd = m.recommendedList.Update(msg)
 	}
 	return m, cmd
 }
@@ -155,6 +182,8 @@ func (m Model) viewActiveTab() string {
 		return m.queueList.View()
 	case tabLiked:
 		return m.likedList.View()
+	case tabRecommended:
+		return m.recommendedList.View()
 	}
 	return ""
 }
@@ -194,10 +223,11 @@ func (m *Model) refreshQueueList() {
 	}
 	items := make([]list.Item, 0, len(qf.VideoIDs))
 	for _, id := range qf.VideoIDs {
+		badge := m.aiBadgeFor(id, 0)
 		if it, ok := m.videoIndex[id]; ok {
-			items = append(items, queueRow{videoID: id, video: it.Video, channel: it.Channel})
+			items = append(items, queueRow{videoID: id, video: it.Video, channel: it.Channel, aiBadge: badge})
 		} else {
-			items = append(items, queueRow{videoID: id})
+			items = append(items, queueRow{videoID: id, aiBadge: badge})
 		}
 	}
 	m.queueList.SetItems(items)
@@ -230,28 +260,56 @@ func (m Model) removeSelectedFromQueue() (tea.Model, tea.Cmd) {
 	return m, mirrorQueueCmd(m.cfg)
 }
 
+// muteSelectedChannel handles Feed and Recommended only — both resolve the
+// acted-on video via a store.Video (which always carries ChannelID). Queue
+// and Playlists rows don't: playlistItemRow/queueRow's Video.ChannelID only
+// ever comes from an unreliable m.videoIndex fallback (api.VideoDetail has
+// no ChannelID field at all), so wiring Mute there today would risk
+// persisting an empty channel ID into mutes.json — don't extend this to
+// those tabs without fixing that first.
 func (m Model) muteSelectedChannel() (tea.Model, tea.Cmd) {
-	sel, ok := m.feedList.SelectedItem().(feedItem)
-	if !ok {
+	video, channel, ok := m.selectedVideo()
+	if !ok || video.ChannelID == "" {
 		return m, nil
 	}
-	channelID := sel.Video.ChannelID
+	channelID := video.ChannelID
 	if err := m.store.MuteChannel(channelID); err != nil {
 		return m, func() tea.Msg { return statusErrMsg{err: err} }
 	}
 
-	// Filter the muted channel out of the currently rendered feed immediately
-	// — don't make the user wait for the next full sync to see it disappear.
-	items := m.feedList.Items()
-	kept := make([]list.Item, 0, len(items))
-	for _, it := range items {
-		if fi, ok := it.(feedItem); ok && fi.Video.ChannelID == channelID {
-			continue
+	// Filter the muted channel out of whichever list is actually on screen
+	// immediately — don't make the user wait for the next full sync to see
+	// it disappear.
+	removeChannel := func(items []list.Item) []list.Item {
+		kept := make([]list.Item, 0, len(items))
+		for _, it := range items {
+			switch row := it.(type) {
+			case feedItem:
+				if row.Video.ChannelID == channelID {
+					continue
+				}
+			case recommendedRow:
+				if row.item.Video.ChannelID == channelID {
+					continue
+				}
+			case searchResultRow:
+				if row.result.Video.ChannelID == channelID {
+					continue
+				}
+			}
+			kept = append(kept, it)
 		}
-		kept = append(kept, it)
+		return kept
 	}
-	m.feedList.SetItems(kept)
-	m.statusMsg = "muted " + sel.Channel
+	switch {
+	case m.searchResultsActive:
+		m.searchResultsList.SetItems(removeChannel(m.searchResultsList.Items()))
+	case m.activeTab == tabRecommended:
+		m.recommendedList.SetItems(removeChannel(m.recommendedList.Items()))
+	default:
+		m.feedList.SetItems(removeChannel(m.feedList.Items()))
+	}
+	m.statusMsg = "muted " + channel
 	return m, nil
 }
 

@@ -20,6 +20,12 @@ var (
 	colorText   = lipgloss.Color("#ece6e1")
 	colorMuted  = lipgloss.Color("#8a8078") // metadata, dimmed/watched rows
 	colorLine   = lipgloss.Color("#3a332e")
+	// colorLogoGleam is the header logo's periodic-pulse highlight — a
+	// warm gray between colorMuted and colorText, not colorText itself:
+	// a first pass used colorText directly and was reported as reading
+	// too stark/white against the logo's resting colorTeal; this keeps
+	// the "glint" subtle rather than a bright flash.
+	colorLogoGleam = lipgloss.Color("#b3aa9f")
 )
 
 var (
@@ -84,10 +90,10 @@ var (
 const pulsePauseTicks = 6
 
 // pulseTintHalfWidth is half the width (in characters) of the moving
-// tinted band in sweepText — a ~2.5 half-width gives a ~5-character-wide
-// band, per the intended "a handful of characters, not the whole line"
-// look, as opposed to a smooth gradient spanning the entire string.
-const pulseTintHalfWidth = 2.5
+// tinted band in sweepText — a ~5 half-width gives a ~10-character-wide
+// band (doubled from the original ~5-character band per explicit request),
+// as opposed to a smooth gradient spanning the entire string.
+const pulseTintHalfWidth = 5
 
 // colorSweepNeutral/colorSweepTint are sweepText's two colors: the resting
 // (and off-band) text color, and the single tint color used both for the

@@ -15,6 +15,7 @@ const (
 	tabQueue
 	tabPlaylists
 	tabLiked
+	tabRecommended
 	tabCount
 )
 
@@ -28,6 +29,8 @@ func (t tab) String() string {
 		return "playlists"
 	case tabLiked:
 		return "liked"
+	case tabRecommended:
+		return "recommended"
 	default:
 		return "?"
 	}
@@ -41,7 +44,7 @@ func (t tab) prev() tab {
 	return (t - 1 + tabCount) % tabCount
 }
 
-var tabLabels = [...]string{"feed", "queue", "playlists", "liked"}
+var tabLabels = [...]string{"feed", "queue", "playlists", "liked", "recommended"}
 
 // logoHeight is asciiLogo's row count.
 const logoHeight = 2
@@ -65,9 +68,12 @@ const headerHeight = logoHeight
 // block needed padding to match the logo's height. Confirmed directly by
 // inspecting cell background attributes from a cast recording, not just
 // visually.
-func renderHeader(active tab, width int) string {
+func renderHeader(active tab, width int, logoSweeping bool, logoSweepTick int) string {
 	band := lipgloss.NewStyle().Background(colorPanel)
 	logo := renderHeaderLogo()
+	if logoSweeping {
+		logo = renderHeaderLogoSweep(logoSweepTick)
+	}
 
 	var tabs string
 	for i, label := range tabLabels {

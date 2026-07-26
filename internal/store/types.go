@@ -53,6 +53,11 @@ type VideoState struct {
 	Liked         bool    `json:"liked,omitempty"`
 	AIScore       float64 `json:"ai_score,omitempty"`
 	SyntheticFlag bool    `json:"synthetic_flag,omitempty"`
+	// Scored marks that the heuristic AI-slop scorer has run for this video
+	// — gates AIScore's computation independently of Seen/newness, so a
+	// video already cached before this feature shipped still gets scored
+	// on its next sync rather than staying unscored forever.
+	Scored bool `json:"scored,omitempty"`
 }
 
 // FeedStateFile is the on-disk shape of feed_state.json: video_id -> state.
@@ -103,9 +108,14 @@ type PlaylistsCacheFile struct {
 	Playlists     []Playlist `json:"playlists"`
 }
 
-// Verdict is a cached LLM inspect result for a video.
+// Verdict is a cached LLM inspect result for a video. Score is populated by
+// the tier-1 transcript classifier (a 0–1 "likely AI" judgment); LikelyAI/
+// Reasoning/SuspectedTools mainly by the tier-2 on-demand inspect hook — but
+// either tier may fill in either field, so both are always accepted from a
+// classifier's output.
 type Verdict struct {
 	VideoID        string    `json:"video_id"`
+	Score          *float64  `json:"score,omitempty"`
 	LikelyAI       bool      `json:"likely_ai"`
 	Reasoning      string    `json:"reasoning,omitempty"`
 	SuspectedTools []string  `json:"suspected_tools,omitempty"`

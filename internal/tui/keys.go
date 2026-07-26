@@ -24,6 +24,10 @@ type keyMap struct {
 	FocusNext key.Binding
 	Up        key.Binding
 	Down      key.Binding
+	Inspect   key.Binding
+	Search    key.Binding
+	SearchWeb key.Binding
+	Sweep     key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -47,5 +51,11 @@ func newKeyMap() keyMap {
 		FocusNext: key.NewBinding(key.WithKeys("right"), key.WithHelp("→", "focus next column")),
 		Up:        key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up")),
 		Down:      key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down")),
+		Inspect:   key.NewBinding(key.WithKeys("i"), key.WithHelp("i", "inspect")),
+		Search:    key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "search")),
+		SearchWeb: key.NewBinding(key.WithKeys("y"), key.WithHelp("y", "search YouTube")),
+		// Sweep is a deliberate easter egg — not listed in footerHints(), so
+		// it only rewards someone who goes looking. Bound to "L" for logo.
+		Sweep: key.NewBinding(key.WithKeys("L"), key.WithHelp("L", "sweep the logo")),
 	}
 }

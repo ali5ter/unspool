@@ -66,6 +66,13 @@ func (m *Model) refreshPreview() {
 		meta += "  ◆ synthetic media"
 	}
 	lines = append(lines, styleMeta.Render(meta))
+	// The video ID/URL isn't shown anywhere else in the UI — surfaced here
+	// so it's copy-able for manual debugging (e.g. testing a
+	// classifier.inspect_command script directly against the same video
+	// `i` would inspect).
+	if video.VideoID != "" {
+		lines = append(lines, styleMeta.Render("https://www.youtube.com/watch?v="+video.VideoID))
+	}
 
 	if desc := renderDescription(video.Description, w); desc != "" {
 		lines = append(lines, "", desc)
