@@ -10,26 +10,21 @@ filter.
 
 ![unspool demo](examples/unspool_demo.gif)
 
-## Features (target, per milestone)
+## Features
 
-- **Shorts-free by construction** — sourced from each channel's `UULF` uploads playlist, not
-  post-filtered
-- **Local-first store** — plain JSON on disk, designed so a future `--export json` is close to
-  a straight copy
-- **Best-effort AI-slop filtering** — channel mute (reliable) + metadata heuristics (advisory) +
-  provenance badges (precise, low recall) + an on-demand LLM inspect hook — never asserts
-  certainty
-- **A locally-owned Queue** (Watch Later replacement) that auto-mirrors to a real YouTube
-  playlist, and a local watch log (history replacement)
-- **Synthesised recommendations** from your own subscriptions and watch history
-- **mpv playback** with audio-only mode (SponsorBlock is wired end-to-end but currently a no-op —
-  mpv's bundled yt-dlp hook doesn't read the segment data yt-dlp provides; see Configuration)
-- **Thumbnails in the preview pane** — `chafa`-rendered symbol/half-block art (`"off"` to
-  disable). Real inline-image protocols (kitty/iTerm2/sixel) are deliberately not used even
-  when your terminal supports one — Bubble Tea's renderer can't redraw them reliably; see
-  Configuration
-- **Pipeline mode** — `--json`, `--sync`, `--export {json,csv,markdown}` (`-o/--output`, default
-  stdout), and `--offline` (serve `--json`/`--export` from the local store only, no API calls)
+- **Shorts-free by construction** — sourced from each channel's dedicated long-form uploads
+  playlist, never fetched in the first place
+- **Local-first** — subscriptions, queue, watch history, and playlist state all live as plain
+  JSON you own
+- **Best-effort AI-slop filtering** — channel mute, an advisory heuristic score, provenance
+  badges, and an on-demand LLM inspect hook (`i`) — never claims certainty
+- **A real Queue and watch log** — local replacements for YouTube's long-discontinued Watch
+  Later/history APIs; the Queue auto-mirrors to a real YouTube playlist
+- **Synthesised Recommended tab** — built from your own subscriptions and watch history, not
+  YouTube's algorithm
+- **mpv playback**, with an audio-only mode
+- **Thumbnails in the preview pane** — rendered via `chafa`, configurable or off
+- **Pipeline mode** — `--json`, `--sync`, `--export {json,csv,markdown}`, and `--offline`
 
 ## Installation
 
