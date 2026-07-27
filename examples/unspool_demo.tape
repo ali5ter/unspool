@@ -9,14 +9,15 @@ Enter
 # Splash: logo + sync against the real account
 Sleep 5s
 
-# Feed tab: browse a few videos — selection updates the preview pane
+# Feed tab: browse a few videos — selection updates the preview pane,
+# including a chafa-rendered thumbnail once it loads
 Sleep 1s
 Down
-Sleep 500ms
+Sleep 2.5s
 Down
-Sleep 500ms
+Sleep 2.5s
 Down
-Sleep 500ms
+Sleep 2.2s
 
 # Move focus to the preview column and scroll it
 Right
