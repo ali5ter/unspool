@@ -95,12 +95,17 @@ const pulsePauseTicks = 6
 // as opposed to a smooth gradient spanning the entire string.
 const pulseTintHalfWidth = 5
 
+// pulseSweepStep is how many characters the tinted band advances per tick
+// (~83ms MiniDot frame). The original ~1 char/tick read as too slow (issue
+// #6); ~2 chars/tick keeps the motion smooth while noticeably quicker.
+const pulseSweepStep = 2.0
+
 // colorSweepNeutral/colorSweepTint are sweepText's two colors: the resting
-// (and off-band) text color, and the single tint color used both for the
-// moving band and — since the spinner glyph is composed into the same
-// string before sweepText ever sees it (see statusLine/viewSplash) — the
-// spinner glyph itself, so glyph and text always share one "this is
-// active" color rather than two different color languages.
+// (and off-band) text color and the moving band's peak color. The spinner
+// glyph is NOT part of the swept string — it's rendered separately in a
+// constant colorTeal (see renderNotice/viewSplash) so the glyph reads as
+// one steady "active" color while only the text after it takes the sweep
+// (issue #6).
 var (
 	colorSweepNeutral = colorMuted
 	colorSweepTint    = colorTeal
@@ -128,7 +133,7 @@ func sweepText(s string, tick int, bg color.Color) string {
 	style := lipgloss.NewStyle().Background(bg)
 
 	travel := float64(n-1) + 2*pulseTintHalfWidth
-	sweepTicks := int(math.Round(travel))
+	sweepTicks := int(math.Round(travel / pulseSweepStep))
 	if sweepTicks < 1 {
 		sweepTicks = 1
 	}

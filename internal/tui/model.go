@@ -909,10 +909,11 @@ func (m Model) viewBody() string {
 // sync — the gradient logo above a dialog with a spinner, mirroring wwlog's
 // splash/loading screens.
 func (m Model) viewSplash() string {
-	text := m.spinnerGlyph() + "  Syncing your subscriptions…"
-	notice := sweepText(text, m.pulseTick, colorPanel)
+	glyph := lipgloss.NewStyle().Background(colorPanel).Foreground(colorTeal).Render(m.spinnerGlyph())
+	gap := lipgloss.NewStyle().Background(colorPanel).Render("  ")
+	notice := glyph + gap + sweepText("Syncing your subscriptions…", m.pulseTick, colorPanel)
 	dialog := renderDialogNoTitle(notice, "ctrl+c to quit")
-	content := lipgloss.JoinVertical(lipgloss.Center, renderLogo(), "", dialog)
+	content := lipgloss.JoinVertical(lipgloss.Center, renderSplashLogoSweep(m.pulseTick), "", dialog)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
 }
 
@@ -1003,8 +1004,9 @@ func (m Model) renderNotice() string {
 	case strings.Contains(m.statusMsg, "failed"):
 		return flat(colorAccent)
 	case m.busy && strings.HasSuffix(m.statusMsg, "…"):
-		text := m.spinnerGlyph() + " " + m.statusMsg
-		return padCell + sweepText(text, m.pulseTick, colorLine) + padCell
+		glyph := lipgloss.NewStyle().Background(colorLine).Foreground(colorTeal).Render(m.spinnerGlyph())
+		gap := lipgloss.NewStyle().Background(colorLine).Render(" ")
+		return padCell + glyph + gap + sweepText(m.statusMsg, m.pulseTick, colorLine) + padCell
 	case strings.HasSuffix(m.statusMsg, "…"):
 		return flat(colorAmber)
 	default:
@@ -1015,12 +1017,10 @@ func (m Model) renderNotice() string {
 // spinnerGlyph returns the spinner's current frame with no styling of its
 // own. It's deliberately raw text, not m.spinner.View() — that method
 // renders through m.spinner.Style, which emits its own ANSI reset at the
-// end. Concatenating that into a larger string and then wrapping the whole
-// thing in another lipgloss Style.Render() breaks: the inner reset fires
-// partway through, so everything after the glyph (the notice text) loses
-// the outer style entirely and falls back to the terminal's default color.
-// Composing the raw glyph into the notice first and styling the combined
-// string in one Render call (see statusLine, viewSplash) avoids this.
+// end. Callers wrap this raw glyph in a single lipgloss Render (its own
+// constant colorTeal, kept separate from the swept text after it — issue
+// #6) so the glyph's color is applied cleanly with no stray reset bleeding
+// into the neighbouring segment.
 func (m Model) spinnerGlyph() string {
 	sp := m.spinner
 	sp.Style = lipgloss.NewStyle()

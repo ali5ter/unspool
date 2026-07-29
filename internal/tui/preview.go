@@ -81,7 +81,11 @@ func (m *Model) refreshPreview() tea.Cmd {
 	if channel != "" {
 		lines = append(lines, styleMeta.Render(channel))
 	}
-	meta := humanAge(video.PublishedAt) + " ago · " + humanDuration(video.DurationSeconds)
+	age, rel := ageParts(video.PublishedAt)
+	if rel {
+		age += " ago"
+	}
+	meta := age + " · " + humanDuration(video.DurationSeconds)
 	if video.ContainsSyntheticMedia {
 		meta += "  ◆ synthetic media"
 	}

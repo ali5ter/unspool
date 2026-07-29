@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"image/color"
 	"math"
 	"strings"
 
@@ -88,17 +89,51 @@ func logoSweepTotalTicks(width int) int {
 // it — closer to light glinting across the wordmark than a status change.
 // tick runs 0..logoSweepTotalTicks(width); the caller owns pacing/looping.
 func renderHeaderLogoSweep(tick int) string {
-	lines, width := logoLines()
+	_, width := logoLines()
 	travel := float64(width-1) + 2*logoSweepTintHalfWidth
 	totalTicks := logoSweepTotalTicks(width)
 	center := -logoSweepTintHalfWidth + float64(tick)/float64(totalTicks)*travel
+	return logoSweepFrame(center, colorPanel)
+}
 
-	base := lipgloss.NewStyle().Bold(true).Background(colorPanel)
+// renderSplashLogoSweep renders the splash logo with a gleam band that loops
+// continuously (pause → sweep → pause) for as long as the first-sync splash
+// is up — unlike the header's single occasional glint. Driven by m.pulseTick
+// (advances each spinner tick while busy) at sweepText's pace, and drawn with
+// no background band to match renderLogo's bare splash styling (issue #5).
+func renderSplashLogoSweep(tick int) string {
+	_, width := logoLines()
+	travel := float64(width-1) + 2*logoSweepTintHalfWidth
+	sweepTicks := int(math.Round(travel / pulseSweepStep))
+	if sweepTicks < 1 {
+		sweepTicks = 1
+	}
+	cycleTicks := pulsePauseTicks + sweepTicks
+	cycleTick := tick % cycleTicks
+	if cycleTick < pulsePauseTicks {
+		return renderLogo() // resting flat teal between passes
+	}
+	sweepTick := cycleTick - pulsePauseTicks
+	center := -logoSweepTintHalfWidth + float64(sweepTick)/float64(sweepTicks)*travel
+	return logoSweepFrame(center, nil)
+}
+
+// logoSweepFrame renders one frame of the wordmark with a gleam band centred
+// at column `center`: base colorTeal everywhere, blended toward colorLogoGleam
+// within logoSweepTintHalfWidth of the centre. The same column is tinted in
+// every row, so it reads as one straight bar crossing the wordmark. bg is the
+// cell background (colorPanel inside the header band, nil on the bare splash).
+func logoSweepFrame(center float64, bg color.Color) string {
+	lines, width := logoLines()
+	base := lipgloss.NewStyle().Bold(true)
+	if bg != nil {
+		base = base.Background(bg)
+	}
 	rendered := make([]string, len(lines))
 	for li, line := range lines {
 		runes := []rune(line)
 		var b strings.Builder
-		for i := 0; i < width; i++ {
+		for i := range width {
 			r := ' '
 			if i < len(runes) {
 				r = runes[i]

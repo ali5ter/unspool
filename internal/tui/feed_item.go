@@ -41,18 +41,37 @@ func (i feedItem) Description() string {
 	return styleMeta.Render(fmt.Sprintf("%s · %s · %s%s", i.Channel, age, dur, badge))
 }
 
+// humanAge formats t as a compact age token: minutes/hours/days/weeks/
+// months while recent, then an absolute "Jan 2006" month-year once past a
+// year. Users don't reason about "1284d" (issue #4), so anything older than
+// ~a year reads as a date instead of an ever-growing day count.
 func humanAge(t time.Time) string {
+	s, _ := ageParts(t)
+	return s
+}
+
+// ageParts returns humanAge's text plus whether it is a relative span (true)
+// or an absolute date (false). Callers that phrase it as "<age> ago" (the
+// preview meta line) use the bool to skip the suffix on the absolute form —
+// "Jan 2023 ago" would read wrong.
+func ageParts(t time.Time) (text string, relative bool) {
 	if t.IsZero() {
-		return "—"
+		return "—", false
 	}
 	d := time.Since(t)
 	switch {
 	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		return fmt.Sprintf("%dm", int(d.Minutes())), true
 	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
+		return fmt.Sprintf("%dh", int(d.Hours())), true
+	case d < 7*24*time.Hour:
+		return fmt.Sprintf("%dd", int(d.Hours()/24)), true
+	case d < 30*24*time.Hour:
+		return fmt.Sprintf("%dw", int(d.Hours()/24/7)), true
+	case d < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo", int(d.Hours()/24/30)), true
 	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
+		return t.Format("Jan 2006"), false
 	}
 }
 
