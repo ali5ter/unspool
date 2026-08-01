@@ -46,14 +46,20 @@ cd unspool
 go build -o unspool .
 ```
 
-**Runtime dependencies:** [`mpv`](https://mpv.io) (which uses `yt-dlp` as its stream backend),
-and optionally [`chafa`](https://hpjansson.org/chafa/) for preview-pane thumbnails (absent —
-or `thumbnails = "off"` in config — just disables thumbnails, nothing else).
+**Runtime dependencies:** [`mpv`](https://mpv.io) (which uses `yt-dlp` as its stream backend)
+for playback, and optionally [`chafa`](https://hpjansson.org/chafa/) for preview-pane
+thumbnails (absent — or `thumbnails = "off"` in config — just disables thumbnails, nothing
+else). The Homebrew tap install above already pulls in all three as formula dependencies; a Go
+or from-source install does not, so run the installer script once:
 
 ```bash
-# macOS
-brew install mpv yt-dlp chafa
+./scripts/install-deps.sh
 ```
+
+(Or install manually — macOS: `brew install mpv yt-dlp chafa`; Linux: your package manager,
+e.g. `sudo apt install mpv yt-dlp chafa`.) Missing tools are never fatal — unspool still
+starts and prints a one-line warning naming what's missing and how to fix it; only the feature
+that tool gates (playback, or thumbnails) is unavailable until then.
 
 ## Quick start
 
@@ -130,12 +136,13 @@ cache_verdicts            = true
 
 ## Scripts
 
-`scripts/` holds what Quick start step 1 runs, plus working examples for the `[classifier]`
-hooks above — `unspool` just shells out to whatever command you configure, so these are
-reference implementations, not hardcoded behaviour:
+`scripts/` holds what Installation/Quick start run, plus working examples for the
+`[classifier]` hooks above — `unspool` just shells out to whatever command you configure, so
+these are reference implementations, not hardcoded behaviour:
 
 | Script | Purpose |
 | --- | --- |
+| `install-deps.sh` | Installs the runtime dependencies (`mpv`, `yt-dlp`, `chafa`) via Homebrew/apt/pacman — see Installation. |
 | `setup-gcp.sh` | Creates/selects a GCP project and enables the YouTube Data API v3 (Quick start step 1). |
 | `inspect-gemini.sh` | Example `classifier.inspect_command` (tier 2) — asks Gemini whether the selected video looks AI-generated, on-demand via `i`. |
 | `inspect-transcript-gemini.sh` | Example `classifier.transcript_command` (tier 1) — judges a new channel's newest video from its auto-generated transcript alone, run automatically during `--sync` when `auto_inspect_new_channels = true`. |

@@ -81,6 +81,53 @@ func (m Model) likeSelected() tea.Cmd {
 	}
 }
 
+// removeSelectedFromLiked unlikes the selected video and removes its row
+// from the Liked tab's list, optimistically — same "update the list now,
+// persist async" pattern as removeSelectedFromQueue/
+// removeSelectedFromOpenPlaylist. Bound to the Remove key ("d") so there's
+// always an explicit, unambiguous way to remove a Liked-tab item, distinct
+// from the Like key's toggle (which depended on the local liked-state
+// cache staying correct — see loadLikedCmd/SyncLikedVideos) — see issue #7.
+func (m Model) removeSelectedFromLiked() (tea.Model, tea.Cmd) {
+	sel, ok := m.likedList.SelectedItem().(likedRow)
+	if !ok {
+		return m, nil
+	}
+	videoID := sel.video.VideoID
+
+	items := m.likedList.Items()
+	kept := make([]list.Item, 0, len(items))
+	for _, it := range items {
+		if lr, ok := it.(likedRow); ok && lr.video.VideoID == videoID {
+			continue
+		}
+		kept = append(kept, it)
+	}
+	m.likedList.SetItems(kept)
+
+	return m, unlikeCmd(m.cfg, videoID)
+}
+
+// unlikeCmd clears a video's like rating on YouTube and in the local
+// cache — the async half of removeSelectedFromLiked.
+func unlikeCmd(cfg *config.Config, videoID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		client, err := newClient(ctx, cfg)
+		if err != nil {
+			return statusErrMsg{err: err}
+		}
+		if err := client.RateVideo(ctx, videoID, "none"); err != nil {
+			return statusErrMsg{err: err}
+		}
+		st := store.New(cfg.StoreDir)
+		if err := st.SetVideoLiked(videoID, false); err != nil {
+			return statusErrMsg{err: err}
+		}
+		return statusErrMsg{text: "removed from liked"}
+	}
+}
+
 // playlistsLoadedMsg carries the result of loadPlaylistsCmd.
 type playlistsLoadedMsg struct {
 	playlists []store.Playlist
@@ -358,6 +405,14 @@ func loadLikedCmd(cfg *config.Config) tea.Cmd {
 		videos, err := client.ListLikedVideos(ctx)
 		if err != nil {
 			return likedLoadedMsg{err: err}
+		}
+		ids := make([]string, 0, len(videos))
+		for _, v := range videos {
+			ids = append(ids, v.VideoID)
+		}
+		st := store.New(cfg.StoreDir)
+		if err := st.SyncLikedVideos(ids); err != nil {
+			return likedLoadedMsg{err: fmt.Errorf("sync local liked state: %w", err)}
 		}
 		return likedLoadedMsg{videos: videos}
 	}

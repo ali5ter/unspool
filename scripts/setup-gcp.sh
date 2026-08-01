@@ -11,8 +11,8 @@
 #   Idempotent: safe to re-run against an existing project.
 #
 # @author Alister Lewis-Bowen <alister@lewis-bowen.org>
-# @version 1.0.0
-# @date 2026-07-17
+# @version 1.1.0
+# @date 2026-08-01
 # @license MIT
 #
 # @usage ./scripts/setup-gcp.sh [project-id]
@@ -23,19 +23,12 @@
 #
 # @exit 0 API enabled successfully; manual OAuth client step printed
 # @exit 1 Missing dependency or gcloud command failure
+#
+# Sourceable: dependency checks and side effects only run inside main(),
+# invoked at the bottom guarded to fire only when executed directly — see
+# scripts/setup-gcp_test.sh, which sources this file to unit-test
+# resolve_project/client_secret_path without gcloud, pfb, or network access.
 set -euo pipefail
-
-type pfb >/dev/null 2>&1 || {
-    echo "error: pfb is required." >&2
-    echo "  macOS: brew tap ali5ter/pfb && brew install pfb" >&2
-    exit 1
-}
-
-type gcloud >/dev/null 2>&1 || {
-    pfb error "gcloud is required — install the Google Cloud SDK first"
-    pfb suggestion "https://cloud.google.com/sdk/docs/install"
-    exit 1
-}
 
 API="youtube.googleapis.com"
 
@@ -78,6 +71,17 @@ client_secret_path() {
 }
 
 main() {
+    type pfb >/dev/null 2>&1 || {
+        echo "error: pfb is required." >&2
+        echo "  macOS: brew tap ali5ter/pfb && brew install pfb" >&2
+        exit 1
+    }
+    type gcloud >/dev/null 2>&1 || {
+        pfb error "gcloud is required — install the Google Cloud SDK first"
+        pfb suggestion "https://cloud.google.com/sdk/docs/install"
+        exit 1
+    }
+
     pfb heading "unspool — Google Cloud setup" "☁️"
 
     local project_id
@@ -109,4 +113,9 @@ main() {
     pfb info "4. Then run: unspool --login"
 }
 
-main "$@"
+# Only run main when executed directly — sourcing (e.g. from
+# scripts/setup-gcp_test.sh) loads the functions above with no side
+# effects, so they're unit-testable without gcloud/pfb/network access.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi
