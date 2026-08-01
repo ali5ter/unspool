@@ -125,6 +125,37 @@ func (s *Store) SetVideoLiked(videoID string, liked bool) error {
 	return s.SaveFeedState(f)
 }
 
+// SyncLikedVideos reconciles feed_state.json's Liked flags against
+// likedVideoIDs — the authoritative result of videos.list(myRating=like) —
+// in a single read-modify-write. Every ID in likedVideoIDs is marked
+// liked; every video currently marked liked that is absent from
+// likedVideoIDs is cleared. This keeps the local cache correct even when a
+// video was liked/unliked directly on YouTube (outside unspool) — without
+// it, a Liked-tab video's cached Liked flag can read false even though
+// it's actually liked, which made the Liked tab's toggle key ("l") send
+// another "like" instead of "none" and look like there was no way to
+// remove an item (issue #7).
+func (s *Store) SyncLikedVideos(likedVideoIDs []string) error {
+	f, err := s.LoadFeedState()
+	if err != nil {
+		return err
+	}
+	liked := make(map[string]bool, len(likedVideoIDs))
+	for _, id := range likedVideoIDs {
+		liked[id] = true
+		state := f.State[id]
+		state.Liked = true
+		f.State[id] = state
+	}
+	for id, state := range f.State {
+		if state.Liked && !liked[id] {
+			state.Liked = false
+			f.State[id] = state
+		}
+	}
+	return s.SaveFeedState(f)
+}
+
 // MarkVideosSeen marks every ID in videoIDs as seen in feed_state.json, in
 // a single read-modify-write. Callers batch IDs rather than calling this
 // per video — feed navigation can mark many videos seen in quick

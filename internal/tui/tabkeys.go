@@ -115,6 +115,8 @@ func (m Model) handleLikedKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.playSelected(true)
 	case key.Matches(msg, m.keys.Like):
 		return m, m.likeSelected()
+	case key.Matches(msg, m.keys.Remove):
+		return m.removeSelectedFromLiked()
 	case key.Matches(msg, m.keys.AddQueue):
 		return m.addSelectedToQueue()
 	case key.Matches(msg, m.keys.AddToList):

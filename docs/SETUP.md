@@ -5,6 +5,11 @@ There is no shared client bundled with the tool — that would mean shipping a s
 repo, which Google's terms don't allow for a data-scoped app. Each user creates their own,
 free, one-time.
 
+**Shortcut:** if `client_secret.json` isn't found, launching `unspool` (with no arguments)
+shows this walkthrough directly on its startup screen, with an `s` key to run step 1
+(`scripts/setup-gcp.sh`) for you and an `r` key to recheck once you've finished steps 2-4
+below — those two have no scriptable path (Google gives none) and stay manual either way.
+
 ## 1. Create a project and enable the API
 
 ```bash

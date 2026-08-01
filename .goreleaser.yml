@@ -33,6 +33,15 @@ brews:
     homepage: https://github.com/ali5ter/unspool
     description: A subscription-first, Shorts-free YouTube TUI
     license: MIT
+    # mpv/yt-dlp drive playback, chafa renders preview-pane thumbnails —
+    # all three are shelled out to (internal/playback, internal/thumbnail)
+    # rather than vendored, so Homebrew must pull them in itself; without
+    # this a fresh `brew install` left users hitting missing-dependency
+    # warnings at first launch (issue #8).
+    dependencies:
+      - name: mpv
+      - name: yt-dlp
+      - name: chafa
     install: |
       bin.install "unspool"
     test: |

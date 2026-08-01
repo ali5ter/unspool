@@ -203,6 +203,19 @@ type Model struct {
 	// dirtySeen holds video IDs marked seen in-memory (see markSeenIfNeeded)
 	// that haven't been flushed to feed_state.json yet — see flushSeenCmd.
 	dirtySeen map[string]bool
+
+	// needsSetup is true when cfg.OAuthClientSecretFile was missing at
+	// startup — Init skips runSync entirely and View shows viewSetupNeeded
+	// instead of letting sync fail with an opaque footer error (issue #9).
+	// setupScriptPath is scripts/setup-gcp.sh's path if found on disk (see
+	// findSetupScript), gating whether the setup screen offers to run it.
+	// settingUp is true only while that script is running via
+	// tea.ExecProcess (the terminal is handed to it for that duration).
+	// setupErr carries a non-nil script exit error to show on the screen.
+	needsSetup      bool
+	setupScriptPath string
+	settingUp       bool
+	setupErr        error
 }
 
 // New builds the initial (pre-sync) model.
@@ -265,6 +278,18 @@ func New(cfg *config.Config) Model {
 	// verdicts yet, not an error worth surfacing at startup.
 	vf, _ := st.LoadVerdicts()
 
+	// See issue #9: check for the OAuth client secret file up front
+	// rather than letting the first sync fail with an opaque
+	// "can't find client_secret.json" error surfaced only in the footer.
+	needsSetup := true
+	if _, err := os.Stat(cfg.OAuthClientSecretFile); err == nil {
+		needsSetup = false
+	}
+	statusMsg := "syncing…"
+	if needsSetup {
+		statusMsg = ""
+	}
+
 	return Model{
 		cfg:                cfg,
 		store:              st,
@@ -284,13 +309,15 @@ func New(cfg *config.Config) Model {
 		pickerList:        newListModel(),
 		searchResultsList: newListModel(),
 		spinner:           sp,
-		syncing:           true,
-		busy:              true,
+		syncing:           !needsSetup,
+		busy:              !needsSetup,
 		quotaBudget:       api.DailyQuota,
-		statusMsg:         "syncing…",
+		statusMsg:         statusMsg,
 		videoIndex:        map[string]feed.Item{},
 		newPlaylistInput:  ti,
 		searchInput:       si,
+		needsSetup:        needsSetup,
+		setupScriptPath:   findSetupScript(),
 	}
 }
 
@@ -319,6 +346,9 @@ type statusErrMsg struct {
 }
 
 func (m Model) Init() tea.Cmd {
+	if m.needsSetup {
+		return logoSweepIntervalCmd()
+	}
 	return tea.Batch(m.spinner.Tick, runSync(m.cfg), logoSweepIntervalCmd())
 }
 
@@ -421,6 +451,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case syncDoneMsg:
 		return m.handleSyncDone(msg)
+
+	case setupScriptDoneMsg:
+		return m.handleSetupScriptDone(msg)
 
 	case statusErrMsg:
 		if msg.err != nil {
@@ -528,6 +561,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.store.MarkVideosSeen(ids)
 			}
 			return m, tea.Quit
+		}
+		if m.needsSetup {
+			return m.updateSetupNeeded(msg)
 		}
 		if m.creatingPlaylist {
 			return m.updateCreatingPlaylist(msg)
@@ -864,6 +900,8 @@ func modalListSize(termWidth, termHeight int) (int, int) {
 func (m Model) View() tea.View {
 	var view string
 	switch {
+	case m.needsSetup:
+		view = m.viewSetupNeeded()
 	case m.syncing && !m.everSynced:
 		view = m.viewSplash()
 	case m.pickerActive:
@@ -932,6 +970,8 @@ func (m Model) footerHints() []hint {
 		hints = []hint{{"↵", "play"}, {"d", "remove"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	case m.activeTab == tabPlaylists:
 		hints = m.playlistsFooterHints()
+	case m.activeTab == tabLiked:
+		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"l", "like"}, {"d", "remove"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	default:
 		hints = []hint{{"↵", "play"}, {"A", "audio"}, {"a", "queue"}, {"m", "mute"}, {"l", "like"}, {"p", "playlist"}, {"tab", "switch"}, {"r", "sync"}, {"q", "quit"}}
 	}
