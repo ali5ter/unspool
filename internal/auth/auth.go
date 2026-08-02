@@ -160,6 +160,16 @@ func Client(ctx context.Context, clientSecretFile string) (*http.Client, error) 
 	return oauth2.NewClient(ctx, src), nil
 }
 
+// HasStoredToken reports whether a token is present in the system
+// keychain — used by the TUI to decide whether to run the interactive
+// login flow automatically before syncing (see internal/tui/setup.go),
+// rather than surfacing loadToken's "run 'unspool --login'" error and
+// leaving the user to run a separate command by hand.
+func HasStoredToken() bool {
+	_, err := loadToken()
+	return err == nil
+}
+
 func randomState() (string, error) {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {

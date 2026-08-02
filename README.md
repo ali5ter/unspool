@@ -70,18 +70,20 @@ that tool gates (playback, or thumbnails) is unavailable until then.
 ./scripts/setup-gcp.sh
 ```
 
-**2. Authenticate** — opens your browser, stores a refresh token in your system keychain:
+**2. Launch the TUI.** With the client secret in place, `unspool` logs you in automatically
+the first time — opens your browser for the Google consent screen, stores a refresh token in
+your system keychain, then syncs:
 
 ```bash
-unspool --login
+unspool
 ```
 
-**3. Browse:**
+(`unspool --login`/`--logout` manage that token explicitly — useful headless, or to re-auth
+before a cron `--sync`, which never opens a browser on its own.)
+
+**3. Browse further:**
 
 ```bash
-# Open the TUI
-unspool
-
 # Refresh the local cache and exit (cron-friendly)
 unspool --sync
 
@@ -91,7 +93,7 @@ unspool --json | jq '.[] | select(.duration_seconds > 1200)'
 # Export the feed — json, csv, or markdown — to a file (default: stdout)
 unspool --export csv -o feed.csv
 
-# Read the local cache with zero API calls (combine with --json or --export)
+# Read the local cache only, no API calls
 unspool --json --offline
 ```
 
