@@ -9,6 +9,8 @@ free, one-time.
 shows this walkthrough directly on its startup screen, with an `s` key to run step 1
 (`scripts/setup-gcp.sh`) for you and an `r` key to recheck once you've finished steps 2-4
 below — those two have no scriptable path (Google gives none) and stay manual either way.
+Once the file is in place, `unspool` logs you in automatically (step 5) — no separate
+command needed.
 
 ## 1. Create a project and enable the API
 
@@ -50,13 +52,17 @@ Save the downloaded file as `client_secret.json` in unspool's config directory:
 
 ## 5. Log in
 
+Once `client_secret.json` is in place, just launch `unspool` — the first run logs you in
+automatically: it opens your browser for the Google consent screen, then stores a refresh
+token in your system keychain. You won't need to repeat this unless you revoke access or log
+out (`unspool --logout`).
+
+To authenticate without opening the TUI (e.g. before a cron `--sync`, which never opens a
+browser on its own), run it explicitly:
+
 ```bash
 unspool --login
 ```
-
-This opens your browser for the Google consent screen, then stores a refresh token in your
-system keychain. You won't need to repeat this unless you revoke access or log out
-(`unspool --logout`).
 
 ## Headless / SSH use
 

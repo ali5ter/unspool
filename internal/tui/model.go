@@ -216,6 +216,18 @@ type Model struct {
 	setupScriptPath string
 	settingUp       bool
 	setupErr        error
+
+	// needsLogin is true when cfg.OAuthClientSecretFile exists but no
+	// OAuth token is stored yet — Init runs the interactive login flow
+	// (see loginProcessCmd) automatically instead of syncing straight
+	// into a "no stored credentials — run 'unspool --login'" failure and
+	// leaving the user to run that command by hand (issue #11).
+	// loggingIn is true only while that flow's subprocess has the
+	// terminal (tea.ExecProcess). loginErr carries a non-nil failure to
+	// show on the login screen, with a manual "r" retry.
+	needsLogin bool
+	loggingIn  bool
+	loginErr   error
 }
 
 // New builds the initial (pre-sync) model.
@@ -285,8 +297,17 @@ func New(cfg *config.Config) Model {
 	if _, err := os.Stat(cfg.OAuthClientSecretFile); err == nil {
 		needsSetup = false
 	}
+	// See issue #11: a client secret with no stored token previously fell
+	// straight into runSync, which failed near-instantly with "no stored
+	// credentials — run 'unspool --login' to authenticate" — read as
+	// "the TUI opens with no sync and no explanation" since the failure
+	// (and its footer message) could come and go within a single frame.
+	// Login is fully automatable (unlike the GCP setup steps), so run it
+	// for the user instead of making them leave the TUI for a separate
+	// command.
+	needsLogin := !needsSetup && !auth.HasStoredToken()
 	statusMsg := "syncing…"
-	if needsSetup {
+	if needsSetup || needsLogin {
 		statusMsg = ""
 	}
 
@@ -309,8 +330,8 @@ func New(cfg *config.Config) Model {
 		pickerList:        newListModel(),
 		searchResultsList: newListModel(),
 		spinner:           sp,
-		syncing:           !needsSetup,
-		busy:              !needsSetup,
+		syncing:           !needsSetup && !needsLogin,
+		busy:              !needsSetup && !needsLogin,
 		quotaBudget:       api.DailyQuota,
 		statusMsg:         statusMsg,
 		videoIndex:        map[string]feed.Item{},
@@ -318,6 +339,8 @@ func New(cfg *config.Config) Model {
 		searchInput:       si,
 		needsSetup:        needsSetup,
 		setupScriptPath:   findSetupScript(),
+		needsLogin:        needsLogin,
+		loggingIn:         needsLogin,
 	}
 }
 
@@ -348,6 +371,9 @@ type statusErrMsg struct {
 func (m Model) Init() tea.Cmd {
 	if m.needsSetup {
 		return logoSweepIntervalCmd()
+	}
+	if m.needsLogin {
+		return tea.Batch(loginProcessCmd(), logoSweepIntervalCmd())
 	}
 	return tea.Batch(m.spinner.Tick, runSync(m.cfg), logoSweepIntervalCmd())
 }
@@ -454,6 +480,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case setupScriptDoneMsg:
 		return m.handleSetupScriptDone(msg)
+
+	case loginDoneMsg:
+		return m.handleLoginDone(msg)
 
 	case statusErrMsg:
 		if msg.err != nil {
@@ -564,6 +593,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.needsSetup {
 			return m.updateSetupNeeded(msg)
+		}
+		if m.needsLogin {
+			return m.updateLoginNeeded(msg)
 		}
 		if m.creatingPlaylist {
 			return m.updateCreatingPlaylist(msg)
@@ -902,6 +934,8 @@ func (m Model) View() tea.View {
 	switch {
 	case m.needsSetup:
 		view = m.viewSetupNeeded()
+	case m.needsLogin:
+		view = m.viewLoginNeeded()
 	case m.syncing && !m.everSynced:
 		view = m.viewSplash()
 	case m.pickerActive:
