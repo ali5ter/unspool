@@ -105,16 +105,26 @@ func (m *Model) refreshPreview() tea.Cmd {
 	m.previewBody = lipgloss.JoinVertical(lipgloss.Left, lines...)
 
 	if m.thumbnailsDisabled || video.VideoID == "" {
+		m.thumbLoading = false
 		m.previewContent = m.previewBody
 		return nil
 	}
 	key := thumbnailCacheKey(video.VideoID, w)
 	if thumb, ok := m.thumbnailCache[key]; ok {
+		m.thumbLoading = false
 		m.previewContent = composePreviewWithThumbnail(thumb, m.previewBody)
 		return nil
 	}
-	m.previewContent = m.previewBody
-	return thumbnailDebounceCmd(video.VideoID, w)
+	// Not cached yet — reserve the thumbnail's row budget immediately with
+	// an animated placeholder instead of leaving it out until the real
+	// render arrives (issue #14: the layout jump when a thumbnail popped
+	// in mid-scroll read as the whole app freezing, even though
+	// fetch/render always ran off the update loop — see
+	// thumbnailDebounceCmd/loadThumbnailCmd).
+	m.thumbLoading = true
+	placeholder := thumbnailPlaceholder(w, m.thumbSpinner.View())
+	m.previewContent = composePreviewWithThumbnail(placeholder, m.previewBody)
+	return tea.Batch(thumbnailDebounceCmd(video.VideoID, w), m.thumbSpinner.Tick)
 }
 
 // thumbnailDebounceRows is how long selection has to sit still on an
@@ -163,6 +173,23 @@ func composePreviewWithThumbnail(thumb, body string) string {
 	return lipgloss.JoinVertical(lipgloss.Left, thumb, "", body)
 }
 
+// thumbnailPlaceholder renders a "loading thumbnail…" placeholder sized to
+// exactly match a real chafa render's row budget (see Render's rows-1
+// contract, mirrored here as previewThumbnailRows-1 newlines) so swapping
+// it for the real thumbnail in handleThumbnailLoaded never shifts anything
+// else in the preview pane (issue #14).
+func thumbnailPlaceholder(cols int, glyph string) string {
+	label := glyph + " loading thumbnail…"
+	if lipgloss.Width(label) > cols {
+		label = glyph
+	}
+	styled := styleMeta.Render(label)
+
+	lines := make([]string, previewThumbnailRows)
+	lines[len(lines)/2] = lipgloss.PlaceHorizontal(cols, lipgloss.Center, styled)
+	return strings.Join(lines, "\n")
+}
+
 // thumbnailLoadedMsg carries the result of a loadThumbnailCmd back to the
 // model. key is the cache key the render was requested for; videoID is the
 // staleness guard, compared against m.previewVideoID at receipt — same
@@ -200,13 +227,22 @@ func loadThumbnailCmd(cfg *config.Config, videoID string, cols int) tea.Cmd {
 // pick it up — same idea as handleInspectDone's patchInspectedBadge.
 func (m Model) handleThumbnailLoaded(msg thumbnailLoadedMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
-		return m, nil // best-effort — a missing/failed thumbnail is never surfaced to the user
+		if msg.videoID == m.previewVideoID {
+			// Best-effort — a missing/failed thumbnail is never surfaced
+			// to the user as an error, but the reserved placeholder row
+			// budget (and its spinner) still needs to stand down rather
+			// than spin forever over nothing.
+			m.thumbLoading = false
+			m.previewContent = m.previewBody
+		}
+		return m, nil
 	}
 	if m.thumbnailCache == nil {
 		m.thumbnailCache = map[string]string{}
 	}
 	m.thumbnailCache[msg.key] = msg.output
 	if msg.videoID == m.previewVideoID {
+		m.thumbLoading = false
 		m.previewContent = composePreviewWithThumbnail(msg.output, m.previewBody)
 	}
 	return m, nil

@@ -46,6 +46,15 @@ type Model struct {
 
 	spinner spinner.Model
 
+	// thumbSpinner animates the preview pane's thumbnail-loading placeholder
+	// (see thumbLoading/thumbnailPlaceholder in preview.go) — a separate
+	// instance from spinner/m.busy because a thumbnail fetch is never a
+	// whole-app "busy" state (issue #14: navigation and every other action
+	// must keep working while it's in flight). bubbles/spinner.Model ticks
+	// are self-tagged by ID, so routing spinner.TickMsg to both instances
+	// in Update is safe — each ignores the other's ticks.
+	thumbSpinner spinner.Model
+
 	syncing     bool
 	everSynced  bool // false only during the very first sync — shows the full splash
 	quotaSpent  int
@@ -196,6 +205,12 @@ type Model struct {
 	thumbnailCache     map[string]string
 	thumbnailsDisabled bool
 
+	// thumbLoading is true while the currently-previewed video's thumbnail
+	// (debounce or fetch/render) is outstanding — drives thumbSpinner's
+	// tick chain (see the spinner.TickMsg case in Update) and, once false,
+	// lets that chain terminate itself rather than ticking forever.
+	thumbLoading bool
+
 	// playingProcess is the currently-running mpv process, if any — tracked
 	// so the Stop key can kill it even if its window never took focus.
 	playingProcess *os.Process
@@ -279,6 +294,12 @@ func New(cfg *config.Config) Model {
 	sp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	sp.Style = lipgloss.NewStyle().Foreground(colorAccent)
 
+	// Same MiniDot glyph as the busy spinner, dimmer (colorMuted) since
+	// the thumbnail placeholder is a quiet background fill-in, not a
+	// blocking wait — see thumbSpinner's field doc.
+	thumbSp := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	thumbSp.Style = lipgloss.NewStyle().Foreground(colorMuted)
+
 	ti := textinput.New()
 	ti.Placeholder = "playlist title"
 
@@ -330,6 +351,7 @@ func New(cfg *config.Config) Model {
 		pickerList:        newListModel(),
 		searchResultsList: newListModel(),
 		spinner:           sp,
+		thumbSpinner:      thumbSp,
 		syncing:           !needsSetup && !needsLogin,
 		busy:              !needsSetup && !needsLogin,
 		quotaBudget:       api.DailyQuota,
@@ -467,13 +489,23 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case spinner.TickMsg:
+		var cmds []tea.Cmd
 		if m.busy {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			m.pulseTick++
-			return m, cmd
+			cmds = append(cmds, cmd)
 		}
-		return m, nil
+		// thumbSpinner self-terminates once thumbLoading goes false: its
+		// own tick chain is simply never re-armed below, rather than
+		// tracked/cancelled explicitly (bubbles/spinner has no cancel —
+		// see thumbSpinner's field doc).
+		if m.thumbLoading {
+			var cmd tea.Cmd
+			m.thumbSpinner, cmd = m.thumbSpinner.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 
 	case syncDoneMsg:
 		return m.handleSyncDone(msg)
