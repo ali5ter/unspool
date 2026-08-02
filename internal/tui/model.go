@@ -168,6 +168,15 @@ type Model struct {
 
 	likedLoaded bool
 
+	// playlistMembership is a video ID -> playlist-titles reverse index
+	// (issue #13: the Liked tab had no way to show which playlist(s) a
+	// liked video is already in), built once per session, lazily, on
+	// first view of the Liked tab — see loadPlaylistMembershipCmd. Only
+	// the Liked tab reads it; the Playlists tab's own "already liked"
+	// badge is free (feed_state.json's Liked flag, no extra fetch).
+	playlistMembership       map[string][]string
+	playlistMembershipLoaded bool
+
 	// Recommended tab (PRD §5.8) — lazily built on first view, same shape
 	// as likedLoaded/loadLikedCmd.
 	recommendedLoaded bool
@@ -535,6 +544,9 @@ func (m Model) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case likedLoadedMsg:
 		return m.handleLikedLoaded(msg)
 
+	case playlistMembershipLoadedMsg:
+		return m.handlePlaylistMembershipLoaded(msg)
+
 	case inspectDoneMsg:
 		return m.handleInspectDone(msg)
 
@@ -850,6 +862,12 @@ func (m *Model) onTabChanged() tea.Cmd {
 			m.busy = true
 			cmds = append(cmds, loadLikedCmd(m.cfg), m.spinner.Tick)
 		}
+		if !m.playlistMembershipLoaded {
+			// Not gated on m.busy/spinner like the load above — this is a
+			// best-effort enhancement (playlist badges fill in once
+			// ready), not something the Liked tab needs to wait on.
+			cmds = append(cmds, loadPlaylistMembershipCmd(m.cfg, m.mirrorPlaylistID()))
+		}
 	case tabRecommended:
 		if !m.recommendedLoaded {
 			if !m.cfg.Recommendations.Enabled {
@@ -1046,18 +1064,55 @@ func (m Model) statusLine() string {
 	keyStyle := band.Foreground(colorText).Bold(true)
 	labelStyle := band.Foreground(colorMuted)
 
-	parts := make([]string, 0, len(m.footerHints()))
-	for _, h := range m.footerHints() {
+	quotaText := fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget)
+	if m.aiHiddenCount > 0 {
+		quotaText += fmt.Sprintf("   %d hidden", m.aiHiddenCount)
+	}
+
+	// Hints are dropped from the right — the shared cross-tab ones
+	// (inspect/search/focus) are always appended last by footerHints —
+	// until hints+quota fits the available width. Without this, the
+	// combined line wraps onto a second terminal row, silently eating
+	// the row budget reserved for renderNotice()'s own row below it:
+	// the status notice ("added to <playlist>", a sync/add/remove
+	// error, ...) was being computed correctly but was never actually
+	// visible (issue #13). avail subtracts styleStatusBar's own
+	// Padding(0, 1) (see the caller wrapping statusLine() in
+	// styleStatusBar.Width(m.width)) — the real content budget is
+	// m.width minus that 2-column pad, not m.width itself.
+	avail := m.width - 2
+	hints := m.footerHints()
+	fits := func(hs []hint) bool {
+		if avail <= 0 {
+			return true
+		}
+		parts := make([]string, 0, len(hs))
+		for _, h := range hs {
+			parts = append(parts, h.key+" "+h.label)
+		}
+		line := strings.Join(parts, "  ")
+		if line != "" {
+			line += "   "
+		}
+		line += quotaText
+		return lipgloss.Width(line) <= avail
+	}
+	for len(hints) > 0 && !fits(hints) {
+		hints = hints[:len(hints)-1]
+	}
+
+	parts := make([]string, 0, len(hints))
+	for _, h := range hints {
 		parts = append(parts, keyStyle.Render(h.key)+labelStyle.Render(" "+h.label))
 	}
 	sep := band.Render("  ")
 	left := strings.Join(parts, sep)
 
-	quota := labelStyle.Render(fmt.Sprintf("quota %d/%d", m.quotaSpent, m.quotaBudget))
-	line1 := left + band.Render("   ") + quota
-	if m.aiHiddenCount > 0 {
-		line1 += band.Render("   ") + labelStyle.Render(fmt.Sprintf("%d hidden", m.aiHiddenCount))
+	line1 := left
+	if left != "" {
+		line1 += band.Render("   ")
 	}
+	line1 += labelStyle.Render(quotaText)
 
 	return line1 + "\n" + m.renderNotice()
 }
