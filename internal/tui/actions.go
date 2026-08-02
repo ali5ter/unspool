@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/ali5ter/unspool/config"
 	"github.com/ali5ter/unspool/internal/api"
@@ -259,9 +261,14 @@ func (m Model) handlePlaylistItemsLoaded(msg playlistItemsLoadedMsg) (tea.Model,
 		m.statusMsg = "load playlist failed: " + msg.err.Error()
 		return m, nil
 	}
+	// feed_state.json's Liked flag is already kept in sync with the real
+	// account on every Liked-tab load (Store.SyncLikedVideos, issue #7) —
+	// reusing it here for the "already liked" badge is free, no extra API
+	// call needed (unlike playlistMembership, the reverse direction).
+	fs, _ := m.store.LoadFeedState()
 	items := make([]list.Item, 0, len(msg.refs))
 	for _, ref := range msg.refs {
-		row := playlistItemRow{ref: ref}
+		row := playlistItemRow{ref: ref, liked: fs.State[ref.VideoID].Liked}
 		if d, ok := msg.details[ref.VideoID]; ok {
 			row.video = store.Video{
 				VideoID:                ref.VideoID,
@@ -427,10 +434,98 @@ func (m Model) handleLikedLoaded(msg likedLoadedMsg) (tea.Model, tea.Cmd) {
 	}
 	items := make([]list.Item, 0, len(msg.videos))
 	for _, v := range msg.videos {
-		items = append(items, likedRow{video: v, aiBadge: m.aiBadgeFor(v.VideoID, 0)})
+		items = append(items, likedRow{
+			video:       v,
+			aiBadge:     m.aiBadgeFor(v.VideoID, 0),
+			inPlaylists: m.playlistMembership[v.VideoID], // nil until loadPlaylistMembershipCmd resolves — fine, see likedRow's field doc
+		})
 	}
 	m.likedList.SetItems(items)
 	m.statusMsg = "loaded liked videos"
+	return m, nil
+}
+
+// playlistMembershipLoadedMsg carries the result of
+// loadPlaylistMembershipCmd: a video ID -> playlist-titles reverse index.
+type playlistMembershipLoadedMsg struct {
+	membership map[string][]string
+	err        error
+}
+
+// playlistMembershipConcurrency bounds how many playlists' contents are
+// fetched at once — politeness toward the API at this scale (a handful of
+// playlists), the same idea as internal/feed.Sync's channelSyncConcurrency
+// rather than a real quota concern (playlistItems.list is 1 unit/page).
+const playlistMembershipConcurrency = 5
+
+// loadPlaylistMembershipCmd fetches every (non-mirror) playlist's contents
+// and inverts them into video ID -> playlist titles, so the Liked tab can
+// show which playlist(s) a video is already in (issue #13). Best-effort:
+// a single playlist failing to list doesn't blank the whole index, and
+// the command itself only reports a total failure (e.g. auth) via err.
+func loadPlaylistMembershipCmd(cfg *config.Config, mirrorID string) tea.Cmd {
+	return func() tea.Msg {
+		ctx := context.Background()
+		client, err := newClient(ctx, cfg)
+		if err != nil {
+			return playlistMembershipLoadedMsg{err: err}
+		}
+		playlists, err := client.ListPlaylists(ctx)
+		if err != nil {
+			return playlistMembershipLoadedMsg{err: err}
+		}
+
+		var mu sync.Mutex
+		membership := map[string][]string{}
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(playlistMembershipConcurrency)
+		for _, pl := range playlists {
+			if mirrorID != "" && pl.PlaylistID == mirrorID {
+				continue
+			}
+			pl := pl
+			g.Go(func() error {
+				refs, err := client.ListPlaylistItemRefs(gctx, pl.PlaylistID)
+				if err != nil {
+					return nil // best-effort — skip this one playlist, keep the rest
+				}
+				mu.Lock()
+				for _, ref := range refs {
+					membership[ref.VideoID] = append(membership[ref.VideoID], pl.Title)
+				}
+				mu.Unlock()
+				return nil
+			})
+		}
+		_ = g.Wait()
+		return playlistMembershipLoadedMsg{membership: membership}
+	}
+}
+
+// handlePlaylistMembershipLoaded stores the freshly built index and, if
+// the Liked tab's rows are already on screen (loadLikedCmd resolved
+// first — the two run concurrently, either can win), patches them in
+// place rather than waiting for some unrelated reload to pick it up —
+// same idea as handleThumbnailLoaded.
+func (m Model) handlePlaylistMembershipLoaded(msg playlistMembershipLoadedMsg) (tea.Model, tea.Cmd) {
+	m.playlistMembershipLoaded = true
+	if msg.err != nil {
+		return m, nil // best-effort — badges just don't appear, no error surfaced
+	}
+	m.playlistMembership = msg.membership
+
+	items := m.likedList.Items()
+	patched := make([]list.Item, 0, len(items))
+	for _, it := range items {
+		row, ok := it.(likedRow)
+		if !ok {
+			patched = append(patched, it)
+			continue
+		}
+		row.inPlaylists = m.playlistMembership[row.video.VideoID]
+		patched = append(patched, row)
+	}
+	m.likedList.SetItems(patched)
 	return m, nil
 }
 

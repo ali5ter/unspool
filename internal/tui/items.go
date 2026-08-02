@@ -58,27 +58,51 @@ type playlistItemRow struct {
 	video   store.Video
 	channel string
 	aiBadge string // set from a cached inspect verdict — see aiBadgeFor
+	// liked mirrors feed_state.json's Liked flag (issue #13: "if a
+	// Playlist video is [already liked], I don't know that by looking
+	// at the TUI") — free to compute, no extra API call (see
+	// handlePlaylistItemsLoaded).
+	liked bool
 }
 
 func (r playlistItemRow) FilterValue() string { return r.ref.Title }
 func (r playlistItemRow) Title() string       { return r.ref.Title }
 func (r playlistItemRow) Description() string {
-	if r.channel == "" {
-		return styleMeta.Render(r.ref.VideoID + r.aiBadge)
+	badge := r.aiBadge
+	if r.liked {
+		badge += "  ♥ liked"
 	}
-	return styleMeta.Render(fmt.Sprintf("%s · %s · %s%s", r.channel, humanAge(r.video.PublishedAt), humanDuration(r.video.DurationSeconds), r.aiBadge))
+	if r.channel == "" {
+		return styleMeta.Render(r.ref.VideoID + badge)
+	}
+	return styleMeta.Render(fmt.Sprintf("%s · %s · %s%s", r.channel, humanAge(r.video.PublishedAt), humanDuration(r.video.DurationSeconds), badge))
 }
 
 // likedRow is a Liked-tab row: a video from videos.list(myRating=like).
 type likedRow struct {
 	video   store.Video
 	aiBadge string // set from a cached inspect verdict — see aiBadgeFor
+	// inPlaylists names the playlist(s) this video is already in, from
+	// m.playlistMembership (issue #13: "a liked video that I want to
+	// save to a Playlist... I don't know [if it's already there] by
+	// looking at the TUI"). nil means either genuinely in none, or the
+	// membership index hasn't loaded yet — either way there's nothing
+	// useful to show, so both render identically (no badge).
+	inPlaylists []string
 }
 
 func (r likedRow) FilterValue() string { return r.video.Title }
 func (r likedRow) Title() string       { return r.video.Title }
 func (r likedRow) Description() string {
-	return styleMeta.Render(fmt.Sprintf("%s · %s · %s%s", r.video.ChannelTitle, humanAge(r.video.PublishedAt), humanDuration(r.video.DurationSeconds), r.aiBadge))
+	badge := r.aiBadge
+	switch len(r.inPlaylists) {
+	case 0:
+	case 1:
+		badge += "  ▤ " + r.inPlaylists[0]
+	default:
+		badge += fmt.Sprintf("  ▤ in %d playlists", len(r.inPlaylists))
+	}
+	return styleMeta.Render(fmt.Sprintf("%s · %s · %s%s", r.video.ChannelTitle, humanAge(r.video.PublishedAt), humanDuration(r.video.DurationSeconds), badge))
 }
 
 // recommendedRow is a Recommended-tab row: a synthesised suggestion with a
